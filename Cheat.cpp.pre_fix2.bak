@@ -1,0 +1,2970 @@
+﻿#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
+#include <algorithm>
+#include <array>
+#include <cctype>
+#include <cerrno>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <vector>
+#include <atomic>
+#include <string>
+#include <cmath>
+
+#include "GameStructs.h"
+#include "imgui.h"
+
+namespace {
+struct Vec2 {
+    float x;
+    float y;
+};
+
+struct Vec3 {
+    float x;
+    float y;
+    float z;
+};
+
+using GameInstanceGetInstanceFn = void* (*)();
+using GameInstanceGetMainCharPtrFn = Entity* (*)(void*, void*);
+using EntityGetAbilityComFn = AbilitySystem* (*)(Entity*, void*);
+using AbilitySystemGetAttributesFn = Attributes* (*)(AbilitySystem*, void*);
+using AbilitySystemGetHpFn = double (*)(AbilitySystem*, void*);
+using AbilitySystemGetServerHpFn = double (*)(AbilitySystem*, void*);
+using AbilitySystemGetUltimateSpFn = float (*)(AbilitySystem*, void*);
+using AbilitySystemSetUltimateSpFn = void (*)(AbilitySystem*, float, void*);
+using AbilitySystemGetSkillCooldownScalarFn = float (*)(AbilitySystem*, void*);
+using ObjectContainerGetAllInteractivesFn = void* (*)(void*, void*);
+using ObjectContainerGetAllEntitiesFn = void* (*)(void*, void*);
+using GameUtilGetMainCameraFn = void* (*)(void*);
+using CameraWorldToScreenPointFn = Vec3 (*)(void*, Vec3, void*);
+
+constexpr uintptr_t kGameInstanceGetInstanceRva = 0x49C58A0;
+constexpr uintptr_t kGameInstanceGetMainCharPtrRva = 0x49C5C30;
+constexpr uintptr_t kEntityGetAbilityComRva = 0x37EC3A0;
+constexpr uintptr_t kAbilitySystemGetAttributesRva = 0x37CCCD0;
+constexpr uintptr_t kAbilitySystemGetHpRva = 0x39B68D0;
+constexpr uintptr_t kAbilitySystemGetServerHpRva = 0x39B6920;
+constexpr uintptr_t kAbilitySystemGetUltimateSpRva = 0x3886D10;
+constexpr uintptr_t kAbilitySystemSetUltimateSpRva = 0x39B6970;
+constexpr uintptr_t kAbilitySystemGetSkillCooldownScalarRva = 0x39B7060;
+constexpr uintptr_t kObjectContainerGetAllInteractivesRva = 0x26CE8C0;
+constexpr uintptr_t kObjectContainerGetAllEntitiesRva = 0x2667620;
+constexpr uintptr_t kGameUtilGetMainCameraRva = 0x3B45C90;
+constexpr uintptr_t kCameraWorldToScreenPointRva = 0xB66F7F0;
+constexpr int kAttrIndexSkillCooldownScalar = 0x10;
+constexpr int kAttrIndexUltimateSpGainScalar = 0x2D;
+constexpr int kAttrIndexAtbCostAddition = 0x2E;
+constexpr int kAttrIndexSkillCooldownAddition = 0x2F;
+constexpr int kAttrIndexCriticalRate = 0x09;
+constexpr int kAttrIndexCriticalDamageIncrease = 0x0A;
+constexpr int kAttrIndexNormalAttackDamageIncrease = 0x11;
+constexpr int kAttrIndexUltimateSkillDamageIncrease = 0x1C;
+constexpr int kAttrIndexNormalSkillDamageIncrease = 0x20;
+constexpr int kAttrIndexComboSkillDamageIncrease = 0x21;
+constexpr int kAttrIndexPhysicalDamageIncrease = 0x32;
+constexpr int kAttrIndexFireDamageIncrease = 0x33;
+constexpr int kAttrIndexPulseDamageIncrease = 0x34;
+constexpr int kAttrIndexCrystDamageIncrease = 0x35;
+constexpr int kAttrIndexNaturalDamageIncrease = 0x36;
+constexpr int kAttrIndexEtherDamageIncrease = 0x37;
+
+constexpr float kPresetUltimateSp = 9999.0f;
+constexpr float kPresetSkillCooldownScalar = 0.01f;
+constexpr float kPresetSkillCooldownAddition = -999.0f;
+constexpr float kPresetAtbCostAddition = -999.0f;
+constexpr float kPresetUltimateSpGainScalar = 10.0f;
+
+constexpr uintptr_t kGameInstancePlayerControllerOffset = 0x28;
+constexpr uintptr_t kGameInstancePlayerOffset = 0x18;
+constexpr uintptr_t kGamePlayerSquadManagerOffset = 0x48;
+constexpr uintptr_t kSquadManagerClientCharsOffset = 0x80;
+constexpr uintptr_t kManagedListItemsOffset = 0x10;
+constexpr uintptr_t kManagedListSizeOffset = 0x18;
+constexpr float kPresetAllSquadUltimateSp = 50000.0f;
+constexpr float kPresetInfiniteDashCount = 9.0f;
+
+constexpr uintptr_t kGameInstanceWorldOffset = 0x10;
+constexpr std::array<uintptr_t, 5> kGameWorldObjectContainerOffsets = {0x170, 0x1F8, 0x200, 0x208, 0x210};
+constexpr std::array<uintptr_t, 5> kObjectContainerInteractivesOffsets = {0xB0, 0x98, 0x90, 0xB8, 0xA8};
+constexpr uintptr_t kEntityRootComponentOffset = 0xA8;
+constexpr uintptr_t kEntityDataOffset = 0xA0;
+constexpr uintptr_t kEntityDataTemplateIdOffset = 0x68;
+constexpr uintptr_t kRootComponentPositionOffset = 0x90;
+constexpr uintptr_t kRootComponentSyncedPositionOffset = 0x154;
+constexpr uintptr_t kBaseEntityDataPositionOffset = 0x8C;
+
+constexpr std::array<uintptr_t, 3> kStaticFieldsOffsets = {0xB8, 0xB0, 0xC0};
+constexpr uintptr_t kGameInstanceStaticInstanceOffset = 0x0;
+constexpr uintptr_t kPlayerControllerDumpBytes = 0x200;
+
+static uintptr_t g_gameBaseAddress = 0;
+static uintptr_t g_typeInfoOffset = 0;
+static char g_offsetInput[32] = "0xFC2FA18";
+static char g_statusText[128] = "";
+static bool g_statusError = false;
+static int g_attributeDisplayLimit = 160;
+
+struct StatEditorState {
+    bool initializedFromGame = false;
+
+    double hpClient = 0.0;
+    double hpServer = 0.0;
+    float skillCooldownScalar = 1.0f;
+    float skillCooldownAddition = 0.0f;
+    float atbCostAddition = 0.0f;
+    float atbValue = 0.0f;
+    float ultimateSpGainScalar = 1.0f;
+    float ultimateSp = 0.0f;
+    float currentDash = 0.0f;
+    float maxDash = 0.0f;
+    float criticalRate = 1.0f;
+    float damageMultiplier = 1.0f;
+
+    bool lockHpClient = false;
+    bool lockHpServer = false;
+    bool lockSkillCooldown = false;
+    bool lockSkillCooldownAddition = false;
+    bool lockAtbCostAddition = false;
+    bool lockAtbValue = false;
+    bool lockUltimateSpGainScalar = false;
+    bool lockUltimateSp = false;
+    bool lockCurrentDash = false;
+    bool lockMaxDash = false;
+    bool lockCriticalRate = false;
+    bool lockDamageMultiplier = false;
+    bool lockInfiniteBlueNoCd = false;
+    bool lockNoCooldownBypass = false;
+    bool lockAllSquadUltimateNoCd = false;
+    bool lockInfiniteStamina = false;
+    bool lockInfiniteBlink = false;
+};
+
+static StatEditorState g_statEditor;
+static char g_editStatusText[128] = "";
+static bool g_editStatusError = false;
+
+struct NearbyChestInfo {
+    Entity* entity = nullptr;
+    uintptr_t entityAddress = 0;
+    Vec3 position{};
+    float distance = 0.0f;
+    uint32_t instanceUid = 0;
+    uint64_t serverId = 0;
+    bool hasPosition = false;
+    bool keywordMatched = false;
+    std::string name;
+    std::string templateId;
+};
+
+struct TreasureToolState {
+    bool onlyChestKeyword = false;
+    bool showRadar = true;
+    bool showChestList = true;
+    bool enableScreenEsp = true;
+    bool espShowCoordinates = true;
+    bool enableTeleportHold = true;
+    bool autoLockAfterTeleport = true;
+    bool teleportLockEnabled = false;
+    bool drawAllInteractives = true;
+    bool limitByDistance = false;
+    bool templateIdExactMatch = false;
+    int teleportHoldMs = 4500;
+    float scanRange = 1200.0f;
+    float radarRange = 120.0f;
+    float teleportHeightOffset = 0.3f;
+    float customTeleport[3] = {0.0f, 0.0f, 0.0f};
+    bool customTeleportInitialized = false;
+    int selectedChestIndex = -1;
+    int espListMaxCount = 18;
+    char templateIdFilter[96] = "";
+    Vec3 teleportHoldTarget{};
+    Vec3 teleportLockTarget{};
+    uint64_t teleportHoldUntilTick = 0;
+    char statusText[160] = "";
+    bool statusError = false;
+};
+
+static TreasureToolState g_treasureTool;
+static std::vector<NearbyChestInfo> g_nearbyChests;
+static uint64_t g_lastChestRefreshTick = 0;
+
+static std::atomic<uintptr_t> g_fastUltimateAbilityAddress{0};
+static std::atomic<uintptr_t> g_fastPlayerControllerAddress{0};
+static std::atomic<uintptr_t> g_fastGameInstanceAddress{0};
+static std::atomic<bool> g_fastUltimateThreadRunning{false};
+static std::atomic<bool> g_fastUltimateThreadStop{false};
+static HANDLE g_fastUltimateThread = nullptr;
+
+enum class CustomValueType {
+    Bool = 0,
+    Int32,
+    UInt32,
+    Int64,
+    UInt64,
+    Float,
+    Double,
+    Pointer,
+    Byte
+};
+
+enum class CustomBaseSource {
+    PlayerController = 0,
+    Entity,
+    AbilitySystem,
+    GameInstance,
+    AbsoluteAddress
+};
+
+struct CustomWatchItem {
+    int id = 0;
+    char label[64] = "";
+    char offsetInput[32] = "0x0";
+    uintptr_t offsetOrAddress = 0;
+    bool parsedOk = true;
+
+    CustomBaseSource baseSource = CustomBaseSource::PlayerController;
+    CustomValueType valueType = CustomValueType::Float;
+    bool lockWrite = false;
+
+    bool boolValue = false;
+    int32_t i32Value = 0;
+    uint32_t u32Value = 0;
+    int64_t i64Value = 0;
+    uint64_t u64Value = 0;
+    float f32Value = 0.0f;
+    double f64Value = 0.0;
+    uintptr_t ptrValue = 0;
+    uint8_t u8Value = 0;
+};
+
+struct CustomWatchDraft {
+    char label[64] = "";
+    char offsetInput[32] = "0x0";
+    int baseSourceIndex = 0;
+    int valueTypeIndex = static_cast<int>(CustomValueType::Float);
+};
+
+static const char* kCustomBaseSourceItems[] = {
+    u8"\u73a9\u5bb6\u63a7\u5236\u5668 + \u504f\u79fb",
+    u8"\u5b9e\u4f53 + \u504f\u79fb",
+    u8"\u80fd\u529b\u7cfb\u7edf + \u504f\u79fb",
+    u8"\u6e38\u620f\u5b9e\u4f8b + \u504f\u79fb",
+    u8"\u7edd\u5bf9\u5730\u5740"
+};
+
+static const char* kCustomValueTypeItems[] = {
+    u8"\u5e03\u5c14(bool, 1\u5b57\u8282)",
+    u8"\u6709\u7b26\u53f7\u6574\u6570(int32)",
+    u8"\u65e0\u7b26\u53f7\u6574\u6570(uint32)",
+    u8"\u957f\u6574\u6570(int64)",
+    u8"\u65e0\u7b26\u53f7\u957f\u6574\u6570(uint64)",
+    u8"\u6d6e\u70b9\u6570(float)",
+    u8"\u53cc\u7cbe\u5ea6(double)",
+    u8"\u6307\u9488(pointer)",
+    u8"\u5b57\u8282(byte)"
+};
+
+static std::vector<CustomWatchItem> g_customWatchItems;
+static CustomWatchDraft g_customWatchDraft;
+static int g_customWatchNextId = 1;
+static char g_customWatchStatusText[160] = "";
+static bool g_customWatchStatusError = false;
+
+struct ResolveResult {
+    bool ok = false;
+    const char* error = u8"未开始";
+    const char* path = u8"无";
+
+    uintptr_t getterFunctionAddress = 0;
+    uintptr_t typeInfoStorageAddress = 0;
+    uintptr_t typeInfoAddress = 0;
+    uintptr_t staticFieldsAddress = 0;
+    uintptr_t staticFieldsOffsetUsed = 0;
+    uintptr_t gameInstanceAddress = 0;
+    uintptr_t playerControllerFieldAddress = 0;
+    PlayerController* playerController = nullptr;
+};
+
+static bool TryCallAbilitySetUltimateSp(AbilitySystem* ability, float value);
+static bool TryReadAttributeDoubleByIndex(AbilitySystem* ability, int index, double& outValue);
+static bool TryWriteAttributeDoubleByIndex(AbilitySystem* ability, int index, double value);
+
+template <typename T>
+static bool WriteValueSafe(uintptr_t addr, T value);
+
+static bool IsValidPtr(const void* ptr) {
+    return ptr != nullptr && !IsBadReadPtr(const_cast<void*>(ptr), sizeof(void*));
+}
+
+static bool IsCanonicalUserPtr(uintptr_t addr) {
+    return addr >= 0x10000 && addr <= 0x00007FFFFFFFFFFFULL;
+}
+
+template <typename T>
+static bool ReadValue(uintptr_t addr, T& outValue) {
+    if (addr == 0 || IsBadReadPtr(reinterpret_cast<void*>(addr), sizeof(T))) {
+        return false;
+    }
+
+    outValue = *reinterpret_cast<T*>(addr);
+    return true;
+}
+
+template <typename T>
+static bool ReadPcField(PlayerController* pc, uintptr_t offset, T& outValue) {
+    return ReadValue(reinterpret_cast<uintptr_t>(pc) + offset, outValue);
+}
+
+static bool ReadPcBoolField(PlayerController* pc, uintptr_t offset, bool& outValue) {
+    uint8_t value = 0;
+    if (!ReadPcField(pc, offset, value)) {
+        return false;
+    }
+
+    outValue = (value != 0);
+    return true;
+}
+
+static std::string ToLowerAscii(std::string value) {
+    for (char& ch : value) {
+        if (ch >= 'A' && ch <= 'Z') {
+            ch = static_cast<char>(ch - 'A' + 'a');
+        }
+    }
+    return value;
+}
+
+static bool ContainsAsciiIgnoreCase(const std::string& haystack, const std::string& needle) {
+    if (needle.empty()) {
+        return true;
+    }
+
+    const std::string lowerHaystack = ToLowerAscii(haystack);
+    const std::string lowerNeedle = ToLowerAscii(needle);
+    return lowerHaystack.find(lowerNeedle) != std::string::npos;
+}
+
+static std::string ReadManagedStringUtf8(uintptr_t strAddress, int maxChars = 96) {
+    if (!IsCanonicalUserPtr(strAddress) || maxChars <= 0) {
+        return {};
+    }
+
+    int32_t len = 0;
+    if (!ReadValue(strAddress + 0x10, len) || len <= 0) {
+        return {};
+    }
+
+    const int32_t clampedLen = (std::min)(len, maxChars);
+    if (clampedLen <= 0 || clampedLen > 1024) {
+        return {};
+    }
+
+    std::vector<wchar_t> wide(static_cast<size_t>(clampedLen) + 1, L'\0');
+    for (int32_t i = 0; i < clampedLen; ++i) {
+        wchar_t ch = 0;
+        if (!ReadValue(strAddress + 0x14 + static_cast<uintptr_t>(i) * sizeof(wchar_t), ch)) {
+            return {};
+        }
+        wide[static_cast<size_t>(i)] = ch;
+    }
+
+    const int utf8Len = WideCharToMultiByte(CP_UTF8, 0, wide.data(), clampedLen, nullptr, 0, nullptr, nullptr);
+    if (utf8Len <= 0 || utf8Len > 4096) {
+        return {};
+    }
+
+    std::string out(static_cast<size_t>(utf8Len), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wide.data(), clampedLen, out.data(), utf8Len, nullptr, nullptr);
+    return out;
+}
+
+static bool TryReadEntityPosition(Entity* entity, Vec3& outPosition) {
+    outPosition = {0.0f, 0.0f, 0.0f};
+    if (!IsValidPtr(entity)) {
+        return false;
+    }
+
+    uintptr_t rootAddress = 0;
+    if (ReadValue(reinterpret_cast<uintptr_t>(entity) + kEntityRootComponentOffset, rootAddress) &&
+        IsCanonicalUserPtr(rootAddress) &&
+        ReadValue(rootAddress + kRootComponentPositionOffset, outPosition)) {
+        return true;
+    }
+
+    uintptr_t entityDataAddress = 0;
+    if (ReadValue(reinterpret_cast<uintptr_t>(entity) + kEntityDataOffset, entityDataAddress) &&
+        IsCanonicalUserPtr(entityDataAddress) &&
+        ReadValue(entityDataAddress + kBaseEntityDataPositionOffset, outPosition)) {
+        return true;
+    }
+
+    return false;
+}
+
+static bool TeleportEntityTo(Entity* entity, const Vec3& targetPos) {
+    if (!IsValidPtr(entity)) {
+        return false;
+    }
+
+    bool wroteAny = false;
+    uintptr_t rootAddress = 0;
+    if (ReadValue(reinterpret_cast<uintptr_t>(entity) + kEntityRootComponentOffset, rootAddress) &&
+        IsCanonicalUserPtr(rootAddress)) {
+        wroteAny |= WriteValueSafe<Vec3>(rootAddress + kRootComponentPositionOffset, targetPos);
+        wroteAny |= WriteValueSafe<Vec3>(rootAddress + kRootComponentSyncedPositionOffset, targetPos);
+    }
+
+    uintptr_t entityDataAddress = 0;
+    if (ReadValue(reinterpret_cast<uintptr_t>(entity) + kEntityDataOffset, entityDataAddress) &&
+        IsCanonicalUserPtr(entityDataAddress)) {
+        wroteAny |= WriteValueSafe<Vec3>(entityDataAddress + kBaseEntityDataPositionOffset, targetPos);
+    }
+
+    return wroteAny;
+}
+
+static void BeginTeleportHold(const Vec3& targetPos) {
+    if (!g_treasureTool.enableTeleportHold) {
+        g_treasureTool.teleportHoldUntilTick = 0;
+        return;
+    }
+
+    const int clampedHoldMs = (std::max)(200, (std::min)(10000, g_treasureTool.teleportHoldMs));
+    g_treasureTool.teleportHoldTarget = targetPos;
+    g_treasureTool.teleportHoldUntilTick = GetTickCount64() + static_cast<uint64_t>(clampedHoldMs);
+}
+
+static void ApplyTeleportHoldIfNeeded(Entity* entity) {
+    if (g_treasureTool.teleportHoldUntilTick == 0 || !IsValidPtr(entity)) {
+        return;
+    }
+
+    const uint64_t nowTick = GetTickCount64();
+    if (nowTick > g_treasureTool.teleportHoldUntilTick) {
+        g_treasureTool.teleportHoldUntilTick = 0;
+        return;
+    }
+
+    TeleportEntityTo(entity, g_treasureTool.teleportHoldTarget);
+}
+
+static bool TryCallGameUtilGetMainCamera(uintptr_t& outCameraAddress) {
+    outCameraAddress = 0;
+    if (g_gameBaseAddress == 0) {
+        return false;
+    }
+
+    const uintptr_t fnAddress = g_gameBaseAddress + kGameUtilGetMainCameraRva;
+    if (IsBadReadPtr(reinterpret_cast<void*>(fnAddress), 16)) {
+        return false;
+    }
+
+    __try {
+        auto fn = reinterpret_cast<GameUtilGetMainCameraFn>(fnAddress);
+        outCameraAddress = reinterpret_cast<uintptr_t>(fn(nullptr));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        outCameraAddress = 0;
+        return false;
+    }
+
+    return IsCanonicalUserPtr(outCameraAddress);
+}
+
+static bool TryWorldToScreen(uintptr_t cameraAddress, const Vec3& worldPos, ImVec2& outScreenPos) {
+    outScreenPos = ImVec2(0.0f, 0.0f);
+    if (g_gameBaseAddress == 0 || !IsCanonicalUserPtr(cameraAddress)) {
+        return false;
+    }
+
+    const uintptr_t fnAddress = g_gameBaseAddress + kCameraWorldToScreenPointRva;
+    if (IsBadReadPtr(reinterpret_cast<void*>(fnAddress), 16)) {
+        return false;
+    }
+
+    Vec3 screenPoint{};
+    __try {
+        auto fn = reinterpret_cast<CameraWorldToScreenPointFn>(fnAddress);
+        screenPoint = fn(reinterpret_cast<void*>(cameraAddress), worldPos, nullptr);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+
+    if (!(screenPoint.z > 0.01f)) {
+        return false;
+    }
+
+    const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+    if (!(displaySize.x > 10.0f && displaySize.y > 10.0f)) {
+        return false;
+    }
+
+    const float screenX = screenPoint.x;
+    const float screenY = displaySize.y - screenPoint.y;
+    if (screenX < -200.0f || screenX > displaySize.x + 200.0f ||
+        screenY < -200.0f || screenY > displaySize.y + 200.0f) {
+        return false;
+    }
+
+    outScreenPos = ImVec2(screenX, screenY);
+    return true;
+}
+
+static bool LooksLikeTreasureChest(const std::string& name, const std::string& templateId) {
+    const std::string lowerName = ToLowerAscii(name);
+    const std::string lowerTemplate = ToLowerAscii(templateId);
+
+    static const std::array<const char*, 11> kKeywords = {
+        "chest", "treasure", "loot", "box", "trchest", "rewardchest", "supplychest",
+        "equipformulachest", "interactive_treasure", "treasurehunt", "dropchest"};
+
+    for (const char* keyword : kKeywords) {
+        if (lowerName.find(keyword) != std::string::npos ||
+            lowerTemplate.find(keyword) != std::string::npos) {
+            return true;
+        }
+    }
+
+    if (name.find(u8"??") != std::string::npos || templateId.find(u8"??") != std::string::npos) {
+        return true;
+    }
+
+    return false;
+}
+
+static bool TryCallObjectContainerGetAllInteractives(uintptr_t objectContainerAddress, uintptr_t& outListAddress) {
+    outListAddress = 0;
+    if (g_gameBaseAddress == 0 || !IsCanonicalUserPtr(objectContainerAddress)) {
+        return false;
+    }
+
+    const uintptr_t fnAddress = g_gameBaseAddress + kObjectContainerGetAllInteractivesRva;
+    if (IsBadReadPtr(reinterpret_cast<void*>(fnAddress), 16)) {
+        return false;
+    }
+
+    __try {
+        auto fn = reinterpret_cast<ObjectContainerGetAllInteractivesFn>(fnAddress);
+        auto* listPtr = fn(reinterpret_cast<void*>(objectContainerAddress), nullptr);
+        outListAddress = reinterpret_cast<uintptr_t>(listPtr);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        outListAddress = 0;
+        return false;
+    }
+
+    return IsCanonicalUserPtr(outListAddress);
+}
+
+static bool TryCallObjectContainerGetAllEntities(uintptr_t objectContainerAddress, uintptr_t& outListAddress) {
+    outListAddress = 0;
+    if (g_gameBaseAddress == 0 || !IsCanonicalUserPtr(objectContainerAddress)) {
+        return false;
+    }
+
+    const uintptr_t fnAddress = g_gameBaseAddress + kObjectContainerGetAllEntitiesRva;
+    if (IsBadReadPtr(reinterpret_cast<void*>(fnAddress), 16)) {
+        return false;
+    }
+
+    __try {
+        auto fn = reinterpret_cast<ObjectContainerGetAllEntitiesFn>(fnAddress);
+        auto* listPtr = fn(reinterpret_cast<void*>(objectContainerAddress), nullptr);
+        outListAddress = reinterpret_cast<uintptr_t>(listPtr);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        outListAddress = 0;
+        return false;
+    }
+
+    return IsCanonicalUserPtr(outListAddress);
+}
+
+static bool TryExtractEntityListFromUnorderedList(uintptr_t unorderedListAddress,
+                                                  uintptr_t& outItemsArrayAddress,
+                                                  int32_t& outCount) {
+    outItemsArrayAddress = 0;
+    outCount = 0;
+    if (!IsCanonicalUserPtr(unorderedListAddress)) {
+        return false;
+    }
+
+    constexpr std::array<uintptr_t, 3> kListFieldOffsets = {0x10, 0x18, 0x20};
+    for (const uintptr_t listFieldOffset : kListFieldOffsets) {
+        uintptr_t listAddress = 0;
+        if (!ReadValue(unorderedListAddress + listFieldOffset, listAddress) || !IsCanonicalUserPtr(listAddress)) {
+            continue;
+        }
+
+        uintptr_t itemsArrayAddress = 0;
+        int32_t size = 0;
+        int32_t maxLength = 0;
+        if (!ReadValue(listAddress + 0x10, itemsArrayAddress) || !IsCanonicalUserPtr(itemsArrayAddress) ||
+            !ReadValue(listAddress + 0x18, size) || size < 0 || size > 8192 ||
+            !ReadValue(itemsArrayAddress + 0x18, maxLength) || maxLength < size || maxLength <= 0 ||
+            maxLength > 32768) {
+            continue;
+        }
+
+        outItemsArrayAddress = itemsArrayAddress;
+        outCount = size;
+        return true;
+    }
+
+    return false;
+}
+
+
+static bool LooksLikeObjectContainer(uintptr_t containerAddress) {
+    if (!IsCanonicalUserPtr(containerAddress)) {
+        return false;
+    }
+
+    int listLikeFieldCount = 0;
+    constexpr std::array<uintptr_t, 7> kContainerListOffsets = {0x88, 0x90, 0x98, 0xA0, 0xA8, 0xB0, 0xB8};
+    for (const uintptr_t offset : kContainerListOffsets) {
+        uintptr_t listAddress = 0;
+        if (ReadValue(containerAddress + offset, listAddress) && IsCanonicalUserPtr(listAddress)) {
+            ++listLikeFieldCount;
+        }
+    }
+
+    return listLikeFieldCount >= 2;
+}
+
+static void PushUniquePointer(std::vector<uintptr_t>& values, uintptr_t value) {
+    if (!IsCanonicalUserPtr(value)) {
+        return;
+    }
+
+    for (uintptr_t existing : values) {
+        if (existing == value) {
+            return;
+        }
+    }
+
+    values.push_back(value);
+}
+
+static void CollectObjectContainerCandidates(uintptr_t baseAddress, std::vector<uintptr_t>& outCandidates) {
+    if (!IsCanonicalUserPtr(baseAddress)) {
+        return;
+    }
+
+    constexpr std::array<uintptr_t, 9> kKnownOffsets = {0x170, 0x188, 0x190, 0x198, 0x1F8, 0x200, 0x208, 0x210, 0x218};
+    for (const uintptr_t offset : kKnownOffsets) {
+        uintptr_t candidate = 0;
+        if (ReadValue(baseAddress + offset, candidate) && LooksLikeObjectContainer(candidate)) {
+            PushUniquePointer(outCandidates, candidate);
+        }
+    }
+
+    for (uintptr_t offset = 0; offset <= 0x320; offset += sizeof(uintptr_t)) {
+        uintptr_t candidate = 0;
+        if (!ReadValue(baseAddress + offset, candidate)) {
+            continue;
+        }
+        if (LooksLikeObjectContainer(candidate)) {
+            PushUniquePointer(outCandidates, candidate);
+        }
+    }
+}
+
+static bool TryResolveObjectContainerAddresses(uintptr_t gameInstanceAddress, std::vector<uintptr_t>& outContainerAddresses) {
+    outContainerAddresses.clear();
+    if (!IsCanonicalUserPtr(gameInstanceAddress)) {
+        return false;
+    }
+
+    uintptr_t worldAddress = 0;
+    if (ReadValue(gameInstanceAddress + kGameInstanceWorldOffset, worldAddress) && IsCanonicalUserPtr(worldAddress)) {
+        CollectObjectContainerCandidates(worldAddress, outContainerAddresses);
+    }
+
+    CollectObjectContainerCandidates(gameInstanceAddress, outContainerAddresses);
+    return !outContainerAddresses.empty();
+}
+
+static bool TryGetInteractiveEntityAddresses(uintptr_t gameInstanceAddress, std::vector<Entity*>& outEntities) {
+    outEntities.clear();
+
+    std::vector<uintptr_t> containerAddresses;
+    if (!TryResolveObjectContainerAddresses(gameInstanceAddress, containerAddresses)) {
+        return false;
+    }
+
+    std::vector<uintptr_t> uniqueEntityAddresses;
+
+    for (uintptr_t objectContainerAddress : containerAddresses) {
+        std::vector<uintptr_t> unorderedCandidates;
+
+        uintptr_t listByMethod = 0;
+        if (TryCallObjectContainerGetAllInteractives(objectContainerAddress, listByMethod)) {
+            PushUniquePointer(unorderedCandidates, listByMethod);
+        }
+
+        uintptr_t allEntitiesByMethod = 0;
+        if (TryCallObjectContainerGetAllEntities(objectContainerAddress, allEntitiesByMethod)) {
+            PushUniquePointer(unorderedCandidates, allEntitiesByMethod);
+        }
+
+        for (const uintptr_t offset : kObjectContainerInteractivesOffsets) {
+            uintptr_t listAddress = 0;
+            if (ReadValue(objectContainerAddress + offset, listAddress)) {
+                PushUniquePointer(unorderedCandidates, listAddress);
+            }
+        }
+
+        for (uintptr_t unorderedListAddress : unorderedCandidates) {
+            uintptr_t itemsArrayAddress = 0;
+            int32_t count = 0;
+            if (!TryExtractEntityListFromUnorderedList(unorderedListAddress, itemsArrayAddress, count) || count <= 0) {
+                continue;
+            }
+
+            for (int32_t i = 0; i < count; ++i) {
+                uintptr_t entityAddress = 0;
+                if (!ReadValue(itemsArrayAddress + 0x20 + static_cast<uintptr_t>(i) * sizeof(uintptr_t), entityAddress)) {
+                    continue;
+                }
+                PushUniquePointer(uniqueEntityAddresses, entityAddress);
+            }
+        }
+    }
+
+    if (uniqueEntityAddresses.empty()) {
+        return false;
+    }
+
+    outEntities.reserve(uniqueEntityAddresses.size());
+    for (uintptr_t entityAddress : uniqueEntityAddresses) {
+        auto* entity = reinterpret_cast<Entity*>(entityAddress);
+        if (IsValidPtr(entity)) {
+            outEntities.push_back(entity);
+        }
+    }
+
+    return !outEntities.empty();
+}
+
+static void RefreshNearbyChestCache(uintptr_t gameInstanceAddress,
+                                    const Vec3& playerPos,
+                                    float range,
+                                    bool onlyChestKeyword,
+                                    std::vector<NearbyChestInfo>& outChests) {
+    outChests.clear();
+
+    std::vector<Entity*> interactives;
+    if (!TryGetInteractiveEntityAddresses(gameInstanceAddress, interactives)) {
+        return;
+    }
+
+    const bool distanceLimited = g_treasureTool.limitByDistance && range > 1.0f;
+    const float clampedRange = (std::max)(10.0f, range);
+    const float rangeSq = clampedRange * clampedRange;
+
+    std::string templateFilter = g_treasureTool.templateIdFilter;
+    while (!templateFilter.empty() && std::isspace(static_cast<unsigned char>(templateFilter.back()))) {
+        templateFilter.pop_back();
+    }
+    size_t headIndex = 0;
+    while (headIndex < templateFilter.size() && std::isspace(static_cast<unsigned char>(templateFilter[headIndex]))) {
+        ++headIndex;
+    }
+    if (headIndex > 0) {
+        templateFilter = templateFilter.substr(headIndex);
+    }
+    const bool hasTemplateFilter = !templateFilter.empty();
+    const std::string templateFilterLower = ToLowerAscii(templateFilter);
+
+    for (Entity* interactive : interactives) {
+        Vec3 interactivePos{};
+        if (!TryReadEntityPosition(interactive, interactivePos)) {
+            continue;
+        }
+
+        const float dx = interactivePos.x - playerPos.x;
+        const float dy = interactivePos.y - playerPos.y;
+        const float dz = interactivePos.z - playerPos.z;
+        const float distSq = dx * dx + dy * dy + dz * dz;
+        if (distanceLimited && distSq > rangeSq) {
+            continue;
+        }
+
+        std::string interactiveName = ReadManagedStringUtf8(reinterpret_cast<uintptr_t>(interactive->name), 80);
+        uintptr_t entityDataAddress = 0;
+        std::string templateId;
+        if (ReadValue(reinterpret_cast<uintptr_t>(interactive) + kEntityDataOffset, entityDataAddress) &&
+            IsCanonicalUserPtr(entityDataAddress)) {
+            uintptr_t templateIdString = 0;
+            if (ReadValue(entityDataAddress + kEntityDataTemplateIdOffset, templateIdString) &&
+                IsCanonicalUserPtr(templateIdString)) {
+                templateId = ReadManagedStringUtf8(templateIdString, 96);
+            }
+        }
+
+        NearbyChestInfo info;
+        info.entity = interactive;
+        info.entityAddress = reinterpret_cast<uintptr_t>(interactive);
+        info.position = interactivePos;
+        info.distance = std::sqrt(distSq);
+        info.instanceUid = interactive->instanceUid;
+        info.serverId = interactive->serverId;
+        info.name = std::move(interactiveName);
+        info.templateId = std::move(templateId);
+        info.keywordMatched = LooksLikeTreasureChest(info.name, info.templateId);
+
+        if (onlyChestKeyword && !info.keywordMatched) {
+            continue;
+        }
+
+        if (!g_treasureTool.drawAllInteractives && !info.keywordMatched) {
+            continue;
+        }
+
+        if (hasTemplateFilter) {
+            const std::string templateLower = ToLowerAscii(info.templateId);
+            const bool matched = g_treasureTool.templateIdExactMatch
+                                     ? (templateLower == templateFilterLower)
+                                     : (templateLower.find(templateFilterLower) != std::string::npos);
+            if (!matched) {
+                continue;
+            }
+        }
+
+        outChests.push_back(std::move(info));
+    }
+
+    std::sort(outChests.begin(), outChests.end(), [](const NearbyChestInfo& lhs, const NearbyChestInfo& rhs) {
+        return lhs.distance < rhs.distance;
+    });
+
+    if (outChests.size() > 1024) {
+        outChests.resize(1024);
+    }
+}
+
+static void DrawChestRadar(const std::vector<NearbyChestInfo>& chests,
+                           const Vec3& playerPos,
+                           float radarRange,
+                           int selectedIndex) {
+    const float clampedRange = (std::max)(20.0f, radarRange);
+    const float canvasSize = 260.0f;
+    ImGui::BeginChild("chest_radar_canvas", ImVec2(canvasSize, canvasSize), true);
+
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    const ImVec2 center = ImVec2(origin.x + canvasSize * 0.5f, origin.y + canvasSize * 0.5f);
+    const float radius = canvasSize * 0.46f;
+
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddCircle(center, radius, IM_COL32(90, 180, 255, 180), 64, 1.5f);
+    draw->AddLine(ImVec2(center.x - radius, center.y), ImVec2(center.x + radius, center.y), IM_COL32(90, 180, 255, 100));
+    draw->AddLine(ImVec2(center.x, center.y - radius), ImVec2(center.x, center.y + radius), IM_COL32(90, 180, 255, 100));
+    draw->AddCircleFilled(center, 3.5f, IM_COL32(120, 255, 120, 240));
+
+    for (size_t i = 0; i < chests.size(); ++i) {
+        const auto& chest = chests[i];
+        const float dx = chest.position.x - playerPos.x;
+        const float dz = chest.position.z - playerPos.z;
+        float nx = dx / clampedRange;
+        float ny = dz / clampedRange;
+        const float len = std::sqrt(nx * nx + ny * ny);
+        if (len > 1.0f && len > 0.0001f) {
+            nx /= len;
+            ny /= len;
+        }
+
+        const ImVec2 dot = ImVec2(center.x + nx * radius, center.y + ny * radius);
+        const bool selected = static_cast<int>(i) == selectedIndex;
+        const ImU32 color = selected ? IM_COL32(255, 200, 50, 255) : IM_COL32(255, 80, 80, 230);
+        draw->AddCircleFilled(dot, selected ? 5.0f : 4.0f, color);
+    }
+
+    ImGui::Dummy(ImVec2(canvasSize - 12.0f, canvasSize - 12.0f));
+    ImGui::EndChild();
+}
+
+template <typename T>
+static bool WriteValueSafe(uintptr_t addr, T value) {
+    if (addr == 0) {
+        return false;
+    }
+
+    __try {
+        *reinterpret_cast<T*>(addr) = value;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static bool AnyLockEnabled() {
+    return g_statEditor.lockHpClient || g_statEditor.lockHpServer || g_statEditor.lockSkillCooldown ||
+           g_statEditor.lockSkillCooldownAddition || g_statEditor.lockAtbCostAddition ||
+           g_statEditor.lockAtbValue || g_statEditor.lockUltimateSpGainScalar ||
+           g_statEditor.lockUltimateSp || g_statEditor.lockCurrentDash ||
+           g_statEditor.lockMaxDash || g_statEditor.lockCriticalRate ||
+           g_statEditor.lockDamageMultiplier || g_statEditor.lockNoCooldownBypass ||
+           g_statEditor.lockAllSquadUltimateNoCd || g_statEditor.lockInfiniteStamina ||
+           g_statEditor.lockInfiniteBlink;
+}
+
+static void SetInfiniteBlueNoCdPreset(bool enabled) {
+    g_statEditor.lockInfiniteBlueNoCd = enabled;
+    if (enabled) {
+        g_statEditor.lockSkillCooldown = true;
+        g_statEditor.lockSkillCooldownAddition = true;
+        g_statEditor.lockAtbCostAddition = true;
+        g_statEditor.lockAtbValue = true;
+        g_statEditor.lockUltimateSpGainScalar = true;
+        g_statEditor.lockUltimateSp = true;
+        g_statEditor.lockNoCooldownBypass = true;
+
+        g_statEditor.skillCooldownScalar = kPresetSkillCooldownScalar;
+        g_statEditor.skillCooldownAddition = kPresetSkillCooldownAddition;
+        g_statEditor.atbCostAddition = kPresetAtbCostAddition;
+        g_statEditor.atbValue = (std::max)(g_statEditor.atbValue, 9999.0f);
+        g_statEditor.ultimateSpGainScalar = kPresetUltimateSpGainScalar;
+        g_statEditor.ultimateSp = (std::max)(g_statEditor.ultimateSp, kPresetUltimateSp);
+    } else {
+        g_statEditor.lockSkillCooldown = false;
+        g_statEditor.lockSkillCooldownAddition = false;
+        g_statEditor.lockAtbCostAddition = false;
+        g_statEditor.lockAtbValue = false;
+        g_statEditor.lockUltimateSpGainScalar = false;
+        g_statEditor.lockUltimateSp = false;
+        g_statEditor.lockNoCooldownBypass = false;
+    }
+}
+
+static void SetAllSquadUltimateNoCdPreset(bool enabled) {
+    g_statEditor.lockAllSquadUltimateNoCd = enabled;
+    if (enabled) {
+        g_statEditor.lockNoCooldownBypass = true;
+        g_statEditor.lockUltimateSp = true;
+        g_statEditor.ultimateSp = (std::max)(g_statEditor.ultimateSp, kPresetAllSquadUltimateSp);
+    }
+}
+
+static void SetInfiniteStaminaPreset(bool enabled) {
+    g_statEditor.lockInfiniteStamina = enabled;
+    if (enabled) {
+        g_statEditor.lockCurrentDash = true;
+        g_statEditor.lockMaxDash = true;
+        g_statEditor.currentDash = (std::max)(g_statEditor.currentDash, kPresetInfiniteDashCount);
+        g_statEditor.maxDash = (std::max)(g_statEditor.maxDash, kPresetInfiniteDashCount);
+    }
+}
+
+static void SetInfiniteBlinkPreset(bool enabled) {
+    g_statEditor.lockInfiniteBlink = enabled;
+    if (enabled) {
+        SetInfiniteStaminaPreset(true);
+    }
+}
+
+static int LockAllSquadUltimateSp(uintptr_t gameInstanceAddress, float spValue);
+
+static bool ApplyEditedValues(PlayerController* pc, AbilitySystem* ability, uintptr_t gameInstanceAddress, bool onlyLocked) {
+    bool wroteAny = false;
+    const auto shouldWrite = [onlyLocked](bool lockFlag) {
+        return !onlyLocked || lockFlag;
+    };
+
+    if (IsValidPtr(ability)) {
+        const uintptr_t abilityBase = reinterpret_cast<uintptr_t>(ability);
+
+        if (shouldWrite(g_statEditor.lockHpClient)) {
+            wroteAny |= WriteValueSafe<double>(abilityBase + 0x138, g_statEditor.hpClient);
+        }
+        if (shouldWrite(g_statEditor.lockHpServer)) {
+            wroteAny |= WriteValueSafe<double>(abilityBase + 0x140, g_statEditor.hpServer);
+        }
+        if (shouldWrite(g_statEditor.lockSkillCooldown)) {
+            wroteAny |= TryWriteAttributeDoubleByIndex(ability, kAttrIndexSkillCooldownScalar, static_cast<double>(g_statEditor.skillCooldownScalar));
+        }
+        if (shouldWrite(g_statEditor.lockSkillCooldownAddition)) {
+            wroteAny |= TryWriteAttributeDoubleByIndex(ability, kAttrIndexSkillCooldownAddition, static_cast<double>(g_statEditor.skillCooldownAddition));
+        }
+        if (shouldWrite(g_statEditor.lockAtbCostAddition)) {
+            wroteAny |= TryWriteAttributeDoubleByIndex(ability, kAttrIndexAtbCostAddition, static_cast<double>(g_statEditor.atbCostAddition));
+        }
+        if (shouldWrite(g_statEditor.lockAtbValue)) {
+            wroteAny |= WriteValueSafe<float>(abilityBase + 0x150, g_statEditor.atbValue);
+        }
+        if (shouldWrite(g_statEditor.lockUltimateSpGainScalar)) {
+            wroteAny |= TryWriteAttributeDoubleByIndex(ability, kAttrIndexUltimateSpGainScalar, static_cast<double>(g_statEditor.ultimateSpGainScalar));
+        }
+        if (shouldWrite(g_statEditor.lockUltimateSp)) {
+            bool setOk = TryCallAbilitySetUltimateSp(ability, g_statEditor.ultimateSp);
+            if (!setOk) {
+                setOk = WriteValueSafe<float>(abilityBase + 0x154, g_statEditor.ultimateSp);
+            }
+            wroteAny |= setOk;
+        }
+        if (shouldWrite(g_statEditor.lockCriticalRate)) {
+            const float clampedCriticalRate = (std::max)(0.0f, g_statEditor.criticalRate);
+            wroteAny |= TryWriteAttributeDoubleByIndex(ability, kAttrIndexCriticalRate, static_cast<double>(clampedCriticalRate));
+        }
+        if (shouldWrite(g_statEditor.lockDamageMultiplier)) {
+            const float clampedMultiplier = (std::max)(1.0f, g_statEditor.damageMultiplier);
+            const double damageAdd = static_cast<double>(clampedMultiplier - 1.0f);
+
+            wroteAny |= TryWriteAttributeDoubleByIndex(ability, kAttrIndexNormalAttackDamageIncrease, damageAdd);
+            wroteAny |= TryWriteAttributeDoubleByIndex(ability, kAttrIndexNormalSkillDamageIncrease, damageAdd);
+            wroteAny |= TryWriteAttributeDoubleByIndex(ability, kAttrIndexComboSkillDamageIncrease, damageAdd);
+            wroteAny |= TryWriteAttributeDoubleByIndex(ability, kAttrIndexUltimateSkillDamageIncrease, damageAdd);
+            wroteAny |= TryWriteAttributeDoubleByIndex(ability, kAttrIndexPhysicalDamageIncrease, damageAdd);
+            wroteAny |= TryWriteAttributeDoubleByIndex(ability, kAttrIndexFireDamageIncrease, damageAdd);
+            wroteAny |= TryWriteAttributeDoubleByIndex(ability, kAttrIndexPulseDamageIncrease, damageAdd);
+            wroteAny |= TryWriteAttributeDoubleByIndex(ability, kAttrIndexCrystDamageIncrease, damageAdd);
+            wroteAny |= TryWriteAttributeDoubleByIndex(ability, kAttrIndexNaturalDamageIncrease, damageAdd);
+            wroteAny |= TryWriteAttributeDoubleByIndex(ability, kAttrIndexEtherDamageIncrease, damageAdd);
+            wroteAny |= TryWriteAttributeDoubleByIndex(ability, kAttrIndexCriticalDamageIncrease, damageAdd);
+        }
+    }
+
+    if (IsValidPtr(pc)) {
+        const uintptr_t pcBase = reinterpret_cast<uintptr_t>(pc);
+        if (shouldWrite(g_statEditor.lockMaxDash)) {
+            wroteAny |= WriteValueSafe<float>(pcBase + 0x80, g_statEditor.maxDash);
+        }
+        if (shouldWrite(g_statEditor.lockCurrentDash)) {
+            wroteAny |= WriteValueSafe<float>(pcBase + 0x84, g_statEditor.currentDash);
+        }
+
+        if (g_statEditor.lockInfiniteStamina || g_statEditor.lockInfiniteBlink) {
+            const float dashTarget = (std::max)((std::max)(g_statEditor.currentDash, g_statEditor.maxDash), kPresetInfiniteDashCount);
+            wroteAny |= WriteValueSafe<float>(pcBase + 0x80, dashTarget);
+            wroteAny |= WriteValueSafe<float>(pcBase + 0x84, dashTarget);
+            wroteAny |= WriteValueSafe<float>(pcBase + 0x88, dashTarget);
+        }
+    }
+
+    if (g_statEditor.lockAllSquadUltimateNoCd && IsCanonicalUserPtr(gameInstanceAddress)) {
+        const float squadUltimateSp = (std::max)(g_statEditor.ultimateSp, kPresetAllSquadUltimateSp);
+        const int applied = LockAllSquadUltimateSp(gameInstanceAddress, squadUltimateSp);
+        wroteAny |= (applied > 0);
+    }
+
+    return wroteAny;
+}
+
+static bool TryCallGameInstanceGetMainChar(uintptr_t gameInstanceAddress, Entity*& outEntity) {
+    outEntity = nullptr;
+    if (g_gameBaseAddress == 0 || gameInstanceAddress == 0) {
+        return false;
+    }
+
+    const uintptr_t fnAddress = g_gameBaseAddress + kGameInstanceGetMainCharPtrRva;
+    if (IsBadReadPtr(reinterpret_cast<void*>(fnAddress), 16)) {
+        return false;
+    }
+
+    __try {
+        auto fn = reinterpret_cast<GameInstanceGetMainCharPtrFn>(fnAddress);
+        outEntity = fn(reinterpret_cast<void*>(gameInstanceAddress), nullptr);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+
+    return IsValidPtr(outEntity);
+}
+
+static bool TryCallEntityGetAbilityCom(Entity* entity, AbilitySystem*& outAbility) {
+    outAbility = nullptr;
+    if (g_gameBaseAddress == 0 || !IsValidPtr(entity)) {
+        return false;
+    }
+
+    const uintptr_t fnAddress = g_gameBaseAddress + kEntityGetAbilityComRva;
+    if (IsBadReadPtr(reinterpret_cast<void*>(fnAddress), 16)) {
+        return false;
+    }
+
+    __try {
+        auto fn = reinterpret_cast<EntityGetAbilityComFn>(fnAddress);
+        outAbility = fn(entity, nullptr);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+
+    return IsValidPtr(outAbility);
+}
+
+static bool TryCallAbilityGetAttributes(AbilitySystem* ability, Attributes*& outAttr) {
+    outAttr = nullptr;
+    if (g_gameBaseAddress == 0 || !IsValidPtr(ability)) {
+        return false;
+    }
+
+    const uintptr_t fnAddress = g_gameBaseAddress + kAbilitySystemGetAttributesRva;
+    if (IsBadReadPtr(reinterpret_cast<void*>(fnAddress), 16)) {
+        return false;
+    }
+
+    __try {
+        auto fn = reinterpret_cast<AbilitySystemGetAttributesFn>(fnAddress);
+        outAttr = fn(ability, nullptr);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+
+    return IsValidPtr(outAttr);
+}
+
+static bool TryCallAbilityGetHp(AbilitySystem* ability, double& outHp) {
+    outHp = 0.0;
+    if (g_gameBaseAddress == 0 || !IsValidPtr(ability)) {
+        return false;
+    }
+
+    const uintptr_t fnAddress = g_gameBaseAddress + kAbilitySystemGetHpRva;
+    if (IsBadReadPtr(reinterpret_cast<void*>(fnAddress), 16)) {
+        return false;
+    }
+
+    __try {
+        auto fn = reinterpret_cast<AbilitySystemGetHpFn>(fnAddress);
+        outHp = fn(ability, nullptr);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool TryCallAbilityGetServerHp(AbilitySystem* ability, double& outHp) {
+    outHp = 0.0;
+    if (g_gameBaseAddress == 0 || !IsValidPtr(ability)) {
+        return false;
+    }
+
+    const uintptr_t fnAddress = g_gameBaseAddress + kAbilitySystemGetServerHpRva;
+    if (IsBadReadPtr(reinterpret_cast<void*>(fnAddress), 16)) {
+        return false;
+    }
+
+    __try {
+        auto fn = reinterpret_cast<AbilitySystemGetServerHpFn>(fnAddress);
+        outHp = fn(ability, nullptr);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool TryCallAbilityGetUltimateSp(AbilitySystem* ability, float& outSp) {
+    outSp = 0.0f;
+    if (g_gameBaseAddress == 0 || !IsValidPtr(ability)) {
+        return false;
+    }
+
+    const uintptr_t fnAddress = g_gameBaseAddress + kAbilitySystemGetUltimateSpRva;
+    if (IsBadReadPtr(reinterpret_cast<void*>(fnAddress), 16)) {
+        return false;
+    }
+
+    __try {
+        auto fn = reinterpret_cast<AbilitySystemGetUltimateSpFn>(fnAddress);
+        outSp = fn(ability, nullptr);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool TryReadAbilityHpPair(AbilitySystem* ability, double& clientValue, double& serverValue) {
+    clientValue = 0.0;
+    serverValue = 0.0;
+
+    if (!IsValidPtr(ability)) {
+        return false;
+    }
+
+    const uintptr_t base = reinterpret_cast<uintptr_t>(ability);
+    const bool directClient = ReadValue(base + 0x138, clientValue);
+    const bool directServer = ReadValue(base + 0x140, serverValue);
+    if (directClient || directServer) {
+        return true;
+    }
+
+    if (!IsValidPtr(ability->m_hp)) {
+        return false;
+    }
+
+    const uintptr_t legacyBase = reinterpret_cast<uintptr_t>(ability->m_hp);
+    const bool legacyClient = ReadValue(legacyBase + 0x10, clientValue);
+    const bool legacyServer = ReadValue(legacyBase + 0x18, serverValue);
+    return legacyClient || legacyServer;
+}
+
+static bool TryCallAbilitySetUltimateSp(AbilitySystem* ability, float value) {
+    if (g_gameBaseAddress == 0 || !IsValidPtr(ability)) {
+        return false;
+    }
+
+    const uintptr_t fnAddress = g_gameBaseAddress + kAbilitySystemSetUltimateSpRva;
+    if (IsBadReadPtr(reinterpret_cast<void*>(fnAddress), 16)) {
+        return false;
+    }
+
+    __try {
+        auto fn = reinterpret_cast<AbilitySystemSetUltimateSpFn>(fnAddress);
+        fn(ability, value, nullptr);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool TryCallAbilityGetSkillCooldownScalar(AbilitySystem* ability, float& outScalar) {
+    outScalar = 1.0f;
+    if (g_gameBaseAddress == 0 || !IsValidPtr(ability)) {
+        return false;
+    }
+
+    const uintptr_t fnAddress = g_gameBaseAddress + kAbilitySystemGetSkillCooldownScalarRva;
+    if (IsBadReadPtr(reinterpret_cast<void*>(fnAddress), 16)) {
+        return false;
+    }
+
+    __try {
+        auto fn = reinterpret_cast<AbilitySystemGetSkillCooldownScalarFn>(fnAddress);
+        outScalar = fn(ability, nullptr);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool TryGetAttributeArrayAddress(AbilitySystem* ability, uintptr_t& outArrayAddress) {
+    outArrayAddress = 0;
+    if (!IsValidPtr(ability)) {
+        return false;
+    }
+
+    const uintptr_t abilityBase = reinterpret_cast<uintptr_t>(ability);
+    uintptr_t attrAddress = 0;
+    if (!ReadValue(abilityBase + 0x130, attrAddress) || !IsCanonicalUserPtr(attrAddress)) {
+        return false;
+    }
+
+    uintptr_t arrayAddress = 0;
+    if (!ReadValue(attrAddress + 0x28, arrayAddress) || !IsCanonicalUserPtr(arrayAddress)) {
+        uintptr_t cacheAddress = 0;
+        if (!ReadValue(attrAddress + 0x18, cacheAddress) || !IsCanonicalUserPtr(cacheAddress) ||
+            !ReadValue(cacheAddress + 0x20, arrayAddress) || !IsCanonicalUserPtr(arrayAddress)) {
+            return false;
+        }
+    }
+
+    int32_t maxLength = 0;
+    if (!ReadValue(arrayAddress + 0x18, maxLength) || maxLength <= 0 || maxLength > 4096) {
+        return false;
+    }
+
+    outArrayAddress = arrayAddress;
+    return true;
+}
+
+static bool TryReadAttributeDoubleByIndex(AbilitySystem* ability, int index, double& outValue) {
+    outValue = 0.0;
+    if (index < 0) {
+        return false;
+    }
+
+    uintptr_t arrayAddress = 0;
+    if (!TryGetAttributeArrayAddress(ability, arrayAddress)) {
+        return false;
+    }
+
+    int32_t maxLength = 0;
+    if (!ReadValue(arrayAddress + 0x18, maxLength) || index >= maxLength) {
+        return false;
+    }
+
+    const uintptr_t valueAddress = arrayAddress + 0x20 + static_cast<uintptr_t>(index) * sizeof(double);
+    return ReadValue(valueAddress, outValue);
+}
+
+static bool TryWriteAttributeDoubleByIndex(AbilitySystem* ability, int index, double value) {
+    if (index < 0) {
+        return false;
+    }
+
+    uintptr_t arrayAddress = 0;
+    if (!TryGetAttributeArrayAddress(ability, arrayAddress)) {
+        return false;
+    }
+
+    int32_t maxLength = 0;
+    if (!ReadValue(arrayAddress + 0x18, maxLength) || index >= maxLength) {
+        return false;
+    }
+
+    const uintptr_t valueAddress = arrayAddress + 0x20 + static_cast<uintptr_t>(index) * sizeof(double);
+    return WriteValueSafe<double>(valueAddress, value);
+}
+
+static bool TryReadManagedListHeader(uintptr_t listAddress, uintptr_t& outItemsArrayAddress, int32_t& outSize) {
+    outItemsArrayAddress = 0;
+    outSize = 0;
+    if (!IsCanonicalUserPtr(listAddress)) {
+        return false;
+    }
+
+    if (!ReadValue(listAddress + kManagedListItemsOffset, outItemsArrayAddress) ||
+        !IsCanonicalUserPtr(outItemsArrayAddress) ||
+        !ReadValue(listAddress + kManagedListSizeOffset, outSize) ||
+        outSize <= 0 || outSize > 128) {
+        return false;
+    }
+
+    int32_t maxLength = 0;
+    if (!ReadValue(outItemsArrayAddress + 0x18, maxLength) || maxLength <= 0) {
+        return false;
+    }
+
+    outSize = (std::min)(outSize, maxLength);
+    return outSize > 0;
+}
+
+static bool TryResolveAbilityAddressFromSquadItem(uintptr_t itemAddress, uintptr_t& outAbilityAddress) {
+    outAbilityAddress = 0;
+    if (!IsCanonicalUserPtr(itemAddress)) {
+        return false;
+    }
+
+    const auto tryEntityAddress = [&outAbilityAddress](uintptr_t entityAddress) {
+        if (!IsCanonicalUserPtr(entityAddress)) {
+            return false;
+        }
+
+        uintptr_t abilityAddress = 0;
+        if (!ReadValue(entityAddress + 0x120, abilityAddress) || !IsCanonicalUserPtr(abilityAddress)) {
+            return false;
+        }
+
+        outAbilityAddress = abilityAddress;
+        return true;
+    };
+
+    if (tryEntityAddress(itemAddress)) {
+        return true;
+    }
+
+    constexpr std::array<uintptr_t, 8> kNestedEntityOffsets = {0x10, 0x18, 0x20, 0x28, 0x30, 0x38, 0x40, 0x48};
+    for (const uintptr_t nestedOffset : kNestedEntityOffsets) {
+        uintptr_t nestedAddress = 0;
+        if (!ReadValue(itemAddress + nestedOffset, nestedAddress)) {
+            continue;
+        }
+        if (tryEntityAddress(nestedAddress)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static int LockAllSquadUltimateSp(uintptr_t gameInstanceAddress, float spValue) {
+    uintptr_t gamePlayerAddress = 0;
+    if (!ReadValue(gameInstanceAddress + kGameInstancePlayerOffset, gamePlayerAddress) ||
+        !IsCanonicalUserPtr(gamePlayerAddress)) {
+        return 0;
+    }
+
+    uintptr_t squadManagerAddress = 0;
+    if (!ReadValue(gamePlayerAddress + kGamePlayerSquadManagerOffset, squadManagerAddress) ||
+        !IsCanonicalUserPtr(squadManagerAddress)) {
+        return 0;
+    }
+
+    uintptr_t clientCharsListAddress = 0;
+    if (!ReadValue(squadManagerAddress + kSquadManagerClientCharsOffset, clientCharsListAddress) ||
+        !IsCanonicalUserPtr(clientCharsListAddress)) {
+        return 0;
+    }
+
+    uintptr_t itemsArrayAddress = 0;
+    int32_t count = 0;
+    if (!TryReadManagedListHeader(clientCharsListAddress, itemsArrayAddress, count)) {
+        return 0;
+    }
+
+    int appliedCount = 0;
+    for (int32_t i = 0; i < count; ++i) {
+        uintptr_t itemAddress = 0;
+        if (!ReadValue(itemsArrayAddress + 0x20 + static_cast<uintptr_t>(i) * sizeof(uintptr_t), itemAddress) ||
+            !IsCanonicalUserPtr(itemAddress)) {
+            continue;
+        }
+
+        uintptr_t abilityAddress = 0;
+        if (!TryResolveAbilityAddressFromSquadItem(itemAddress, abilityAddress)) {
+            continue;
+        }
+
+        auto* squadAbility = reinterpret_cast<AbilitySystem*>(abilityAddress);
+        bool ok = TryCallAbilitySetUltimateSp(squadAbility, spValue);
+        ok |= WriteValueSafe<float>(abilityAddress + 0x154, spValue);
+
+        if (ok) {
+            ++appliedCount;
+        }
+    }
+
+    return appliedCount;
+}
+
+static DWORD WINAPI FastUltimateThreadProc(LPVOID) {
+    while (!g_fastUltimateThreadStop.load()) {
+        const uintptr_t abilityAddress = g_fastUltimateAbilityAddress.load();
+        const uintptr_t pcAddress = g_fastPlayerControllerAddress.load();
+        const uintptr_t gameInstanceAddress = g_fastGameInstanceAddress.load();
+
+        if (abilityAddress != 0) {
+            auto* ability = reinterpret_cast<AbilitySystem*>(abilityAddress);
+
+            if (g_statEditor.lockSkillCooldown) {
+                TryWriteAttributeDoubleByIndex(ability, kAttrIndexSkillCooldownScalar, static_cast<double>(g_statEditor.skillCooldownScalar));
+            }
+            if (g_statEditor.lockSkillCooldownAddition) {
+                TryWriteAttributeDoubleByIndex(ability, kAttrIndexSkillCooldownAddition, static_cast<double>(g_statEditor.skillCooldownAddition));
+            }
+            if (g_statEditor.lockAtbCostAddition) {
+                TryWriteAttributeDoubleByIndex(ability, kAttrIndexAtbCostAddition, static_cast<double>(g_statEditor.atbCostAddition));
+            }
+            if (g_statEditor.lockAtbValue) {
+                WriteValueSafe<float>(abilityAddress + 0x150, g_statEditor.atbValue);
+            }
+            if (g_statEditor.lockUltimateSpGainScalar) {
+                TryWriteAttributeDoubleByIndex(ability, kAttrIndexUltimateSpGainScalar, static_cast<double>(g_statEditor.ultimateSpGainScalar));
+            }
+            if (g_statEditor.lockUltimateSp) {
+                if (!TryCallAbilitySetUltimateSp(ability, g_statEditor.ultimateSp)) {
+                    WriteValueSafe<float>(abilityAddress + 0x154, g_statEditor.ultimateSp);
+                }
+            }
+        }
+
+        if (pcAddress != 0 && (g_statEditor.lockInfiniteStamina || g_statEditor.lockInfiniteBlink)) {
+            const float dashTarget = (std::max)((std::max)(g_statEditor.currentDash, g_statEditor.maxDash), kPresetInfiniteDashCount);
+            WriteValueSafe<float>(pcAddress + 0x80, dashTarget);
+            WriteValueSafe<float>(pcAddress + 0x84, dashTarget);
+            WriteValueSafe<float>(pcAddress + 0x88, dashTarget);
+        }
+
+        if (gameInstanceAddress != 0 && g_statEditor.lockAllSquadUltimateNoCd) {
+            const float squadUltimateSp = (std::max)(g_statEditor.ultimateSp, kPresetAllSquadUltimateSp);
+            LockAllSquadUltimateSp(gameInstanceAddress, squadUltimateSp);
+        }
+
+        Sleep(8);
+    }
+
+    g_fastUltimateThreadRunning.store(false);
+    return 0;
+}
+
+static void EnsureFastUltimateThread() {
+    if (g_fastUltimateThreadRunning.load()) {
+        return;
+    }
+
+    g_fastUltimateThreadStop.store(false);
+    g_fastUltimateThread = CreateThread(nullptr, 0, FastUltimateThreadProc, nullptr, 0, nullptr);
+    if (g_fastUltimateThread) {
+        g_fastUltimateThreadRunning.store(true);
+    }
+}
+
+static void UpdateFastUltimateTarget(AbilitySystem* ability, PlayerController* pc, uintptr_t gameInstanceAddress) {
+    g_fastUltimateAbilityAddress.store(reinterpret_cast<uintptr_t>(ability));
+    g_fastPlayerControllerAddress.store(reinterpret_cast<uintptr_t>(pc));
+    g_fastGameInstanceAddress.store(gameInstanceAddress);
+}
+
+static void StopFastUltimateThread() {
+    g_fastUltimateThreadStop.store(true);
+    g_fastUltimateAbilityAddress.store(0);
+    g_fastPlayerControllerAddress.store(0);
+    g_fastGameInstanceAddress.store(0);
+
+    if (g_fastUltimateThread) {
+        WaitForSingleObject(g_fastUltimateThread, 3000);
+        CloseHandle(g_fastUltimateThread);
+        g_fastUltimateThread = nullptr;
+    }
+
+    g_fastUltimateThreadRunning.store(false);
+}
+
+static void InitGameBase() {
+    if (g_gameBaseAddress != 0) {
+        return;
+    }
+
+    HMODULE mod = GetModuleHandleA("GameAssembly.dll");
+    if (!mod) {
+        mod = GetModuleHandleA("UnityPlayer.dll");
+    }
+
+    if (mod) {
+        g_gameBaseAddress = reinterpret_cast<uintptr_t>(mod);
+    }
+}
+
+static bool TryParseHex(const char* text, uintptr_t& outValue) {
+    if (!text) {
+        return false;
+    }
+
+    const char* p = text;
+    while (*p && std::isspace(static_cast<unsigned char>(*p))) {
+        ++p;
+    }
+
+    if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
+        p += 2;
+    }
+
+    if (*p == '\0') {
+        return false;
+    }
+
+    errno = 0;
+    char* end = nullptr;
+    const unsigned long long value = std::strtoull(p, &end, 16);
+    if (p == end || errno == ERANGE) {
+        return false;
+    }
+
+    while (*end && std::isspace(static_cast<unsigned char>(*end))) {
+        ++end;
+    }
+
+    if (*end != '\0') {
+        return false;
+    }
+
+    outValue = static_cast<uintptr_t>(value);
+    return true;
+}
+
+static void EnsureTypeInfoOffsetInitialized() {
+    if (g_typeInfoOffset != 0) {
+        return;
+    }
+
+    uintptr_t parsed = 0;
+    if (TryParseHex(g_offsetInput, parsed)) {
+        g_typeInfoOffset = parsed;
+    }
+}
+
+static CustomBaseSource ToCustomBaseSource(int index) {
+    const int clamped = (std::max)(0, (std::min)(index, IM_ARRAYSIZE(kCustomBaseSourceItems) - 1));
+    return static_cast<CustomBaseSource>(clamped);
+}
+
+static CustomValueType ToCustomValueType(int index) {
+    const int clamped = (std::max)(0, (std::min)(index, IM_ARRAYSIZE(kCustomValueTypeItems) - 1));
+    return static_cast<CustomValueType>(clamped);
+}
+
+static bool IsBlankText(const char* text) {
+    if (!text) {
+        return true;
+    }
+
+    for (const char* p = text; *p; ++p) {
+        if (!std::isspace(static_cast<unsigned char>(*p))) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static void SetCustomWatchStatus(const char* text, bool isError) {
+    std::snprintf(g_customWatchStatusText, sizeof(g_customWatchStatusText), "%s", text ? text : "");
+    g_customWatchStatusError = isError;
+}
+
+static void SetTreasureStatus(const char* text, bool isError) {
+    std::snprintf(g_treasureTool.statusText, sizeof(g_treasureTool.statusText), "%s", text ? text : "");
+    g_treasureTool.statusError = isError;
+}
+
+static bool UpdateCustomWatchOffset(CustomWatchItem& item) {
+    uintptr_t parsed = 0;
+    if (!TryParseHex(item.offsetInput, parsed)) {
+        item.parsedOk = false;
+        return false;
+    }
+
+    item.offsetOrAddress = parsed;
+    item.parsedOk = true;
+    std::snprintf(item.offsetInput, sizeof(item.offsetInput), "0x%llX", static_cast<unsigned long long>(parsed));
+    return true;
+}
+
+static uintptr_t ResolveCustomWatchAddress(
+    const CustomWatchItem& item,
+    PlayerController* pc,
+    Entity* entity,
+    AbilitySystem* ability,
+    uintptr_t gameInstanceAddress) {
+    if (!item.parsedOk) {
+        return 0;
+    }
+
+    if (item.baseSource == CustomBaseSource::AbsoluteAddress) {
+        return item.offsetOrAddress;
+    }
+
+    uintptr_t baseAddress = 0;
+    switch (item.baseSource) {
+    case CustomBaseSource::PlayerController:
+        baseAddress = reinterpret_cast<uintptr_t>(pc);
+        break;
+    case CustomBaseSource::Entity:
+        baseAddress = reinterpret_cast<uintptr_t>(entity);
+        break;
+    case CustomBaseSource::AbilitySystem:
+        baseAddress = reinterpret_cast<uintptr_t>(ability);
+        break;
+    case CustomBaseSource::GameInstance:
+        baseAddress = gameInstanceAddress;
+        break;
+    case CustomBaseSource::AbsoluteAddress:
+        baseAddress = 0;
+        break;
+    }
+
+    if (baseAddress == 0) {
+        return 0;
+    }
+
+    return baseAddress + item.offsetOrAddress;
+}
+
+static bool ReadCustomWatchValue(CustomWatchItem& item, uintptr_t address) {
+    switch (item.valueType) {
+    case CustomValueType::Bool: {
+        uint8_t value = 0;
+        if (!ReadValue(address, value)) {
+            return false;
+        }
+        item.boolValue = (value != 0);
+        return true;
+    }
+    case CustomValueType::Int32:
+        return ReadValue(address, item.i32Value);
+    case CustomValueType::UInt32:
+        return ReadValue(address, item.u32Value);
+    case CustomValueType::Int64:
+        return ReadValue(address, item.i64Value);
+    case CustomValueType::UInt64:
+        return ReadValue(address, item.u64Value);
+    case CustomValueType::Float:
+        return ReadValue(address, item.f32Value);
+    case CustomValueType::Double:
+        return ReadValue(address, item.f64Value);
+    case CustomValueType::Pointer:
+        return ReadValue(address, item.ptrValue);
+    case CustomValueType::Byte:
+        return ReadValue(address, item.u8Value);
+    }
+
+    return false;
+}
+
+static bool ReadCustomWatchValueText(const CustomWatchItem& item, uintptr_t address, char* outText, size_t outTextSize) {
+    if (!outText || outTextSize == 0) {
+        return false;
+    }
+
+    outText[0] = '\0';
+    switch (item.valueType) {
+    case CustomValueType::Bool: {
+        uint8_t value = 0;
+        if (!ReadValue(address, value)) {
+            return false;
+        }
+        std::snprintf(outText, outTextSize, "%s", value ? "true" : "false");
+        return true;
+    }
+    case CustomValueType::Int32: {
+        int32_t value = 0;
+        if (!ReadValue(address, value)) {
+            return false;
+        }
+        std::snprintf(outText, outTextSize, "%d", value);
+        return true;
+    }
+    case CustomValueType::UInt32: {
+        uint32_t value = 0;
+        if (!ReadValue(address, value)) {
+            return false;
+        }
+        std::snprintf(outText, outTextSize, "%u", value);
+        return true;
+    }
+    case CustomValueType::Int64: {
+        int64_t value = 0;
+        if (!ReadValue(address, value)) {
+            return false;
+        }
+        std::snprintf(outText, outTextSize, "%lld", static_cast<long long>(value));
+        return true;
+    }
+    case CustomValueType::UInt64: {
+        uint64_t value = 0;
+        if (!ReadValue(address, value)) {
+            return false;
+        }
+        std::snprintf(outText, outTextSize, "%llu", static_cast<unsigned long long>(value));
+        return true;
+    }
+    case CustomValueType::Float: {
+        float value = 0.0f;
+        if (!ReadValue(address, value)) {
+            return false;
+        }
+        std::snprintf(outText, outTextSize, "%.6f", value);
+        return true;
+    }
+    case CustomValueType::Double: {
+        double value = 0.0;
+        if (!ReadValue(address, value)) {
+            return false;
+        }
+        std::snprintf(outText, outTextSize, "%.6f", value);
+        return true;
+    }
+    case CustomValueType::Pointer: {
+        uintptr_t value = 0;
+        if (!ReadValue(address, value)) {
+            return false;
+        }
+        std::snprintf(outText, outTextSize, "0x%llX", static_cast<unsigned long long>(value));
+        return true;
+    }
+    case CustomValueType::Byte: {
+        uint8_t value = 0;
+        if (!ReadValue(address, value)) {
+            return false;
+        }
+        std::snprintf(outText, outTextSize, "%u (0x%02X)", value, value);
+        return true;
+    }
+    }
+
+    return false;
+}
+
+static bool WriteCustomWatchValue(const CustomWatchItem& item, uintptr_t address) {
+    switch (item.valueType) {
+    case CustomValueType::Bool:
+        return WriteValueSafe<uint8_t>(address, item.boolValue ? 1 : 0);
+    case CustomValueType::Int32:
+        return WriteValueSafe<int32_t>(address, item.i32Value);
+    case CustomValueType::UInt32:
+        return WriteValueSafe<uint32_t>(address, item.u32Value);
+    case CustomValueType::Int64:
+        return WriteValueSafe<int64_t>(address, item.i64Value);
+    case CustomValueType::UInt64:
+        return WriteValueSafe<uint64_t>(address, item.u64Value);
+    case CustomValueType::Float:
+        return WriteValueSafe<float>(address, item.f32Value);
+    case CustomValueType::Double:
+        return WriteValueSafe<double>(address, item.f64Value);
+    case CustomValueType::Pointer:
+        return WriteValueSafe<uintptr_t>(address, item.ptrValue);
+    case CustomValueType::Byte:
+        return WriteValueSafe<uint8_t>(address, item.u8Value);
+    }
+
+    return false;
+}
+
+static int ApplyLockedCustomWatchItems(
+    PlayerController* pc,
+    Entity* entity,
+    AbilitySystem* ability,
+    uintptr_t gameInstanceAddress) {
+    int writeSuccessCount = 0;
+
+    for (CustomWatchItem& item : g_customWatchItems) {
+        if (!item.lockWrite || !item.parsedOk) {
+            continue;
+        }
+
+        const uintptr_t address = ResolveCustomWatchAddress(item, pc, entity, ability, gameInstanceAddress);
+        if (address == 0) {
+            continue;
+        }
+
+        if (WriteCustomWatchValue(item, address)) {
+            ++writeSuccessCount;
+        }
+    }
+
+    return writeSuccessCount;
+}
+
+static bool ResolveViaGetter(ResolveResult& result) {
+    result.getterFunctionAddress = g_gameBaseAddress + kGameInstanceGetInstanceRva;
+
+    if (result.getterFunctionAddress == 0 || IsBadReadPtr(reinterpret_cast<void*>(result.getterFunctionAddress), 16)) {
+        result.error = u8"getter 函数地址无效";
+        return false;
+    }
+
+    const uint8_t* code = reinterpret_cast<const uint8_t*>(result.getterFunctionAddress);
+    if (code[0] != 0x48 || code[1] != 0x83 || code[2] != 0xEC) {
+        result.error = u8"getter RVA 已变化（函数特征不匹配）";
+        return false;
+    }
+
+    uintptr_t gameInstance = 0;
+    __try {
+        auto fn = reinterpret_cast<GameInstanceGetInstanceFn>(result.getterFunctionAddress);
+        gameInstance = reinterpret_cast<uintptr_t>(fn());
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        result.error = u8"调用 GameInstance_get_instance 时异常";
+        return false;
+    }
+
+    if (!IsCanonicalUserPtr(gameInstance) || !IsValidPtr(reinterpret_cast<void*>(gameInstance))) {
+        result.error = u8"getter 返回的 GameInstance 指针无效";
+        return false;
+    }
+
+    result.gameInstanceAddress = gameInstance;
+    result.playerControllerFieldAddress = gameInstance + kGameInstancePlayerControllerOffset;
+
+    if (!ReadValue(result.playerControllerFieldAddress, result.playerController) || !IsValidPtr(result.playerController)) {
+        result.error = u8"m_playerController 为空（请先进入地图）";
+        return false;
+    }
+
+    result.path = u8"RVA 函数";
+    result.ok = true;
+    result.error = u8"成功";
+    return true;
+}
+
+static bool ResolveViaTypeInfo(ResolveResult& result) {
+    if (g_typeInfoOffset == 0) {
+        result.error = u8"TypeInfo 偏移为 0";
+        return false;
+    }
+
+    result.typeInfoStorageAddress = g_gameBaseAddress + g_typeInfoOffset;
+    if (!ReadValue(result.typeInfoStorageAddress, result.typeInfoAddress) || result.typeInfoAddress == 0) {
+        result.error = u8"读取 TypeInfo 指针失败";
+        return false;
+    }
+
+    if (!IsCanonicalUserPtr(result.typeInfoAddress)) {
+        result.error = u8"TypeInfo 指针异常（可能尚未初始化）";
+        return false;
+    }
+
+    for (uintptr_t staticOffset : kStaticFieldsOffsets) {
+        const uintptr_t staticFieldsPtrAddress = result.typeInfoAddress + staticOffset;
+        uintptr_t staticFields = 0;
+        if (!ReadValue(staticFieldsPtrAddress, staticFields) || !IsCanonicalUserPtr(staticFields)) {
+            continue;
+        }
+
+        uintptr_t gameInstance = 0;
+        if (!ReadValue(staticFields + kGameInstanceStaticInstanceOffset, gameInstance) || !IsCanonicalUserPtr(gameInstance)) {
+            continue;
+        }
+
+        uintptr_t playerControllerField = gameInstance + kGameInstancePlayerControllerOffset;
+        PlayerController* playerController = nullptr;
+        if (!ReadValue(playerControllerField, playerController) || !IsValidPtr(playerController)) {
+            continue;
+        }
+
+        result.staticFieldsAddress = staticFields;
+        result.staticFieldsOffsetUsed = staticOffset;
+        result.gameInstanceAddress = gameInstance;
+        result.playerControllerFieldAddress = playerControllerField;
+        result.playerController = playerController;
+        result.path = u8"TypeInfo 链";
+        result.ok = true;
+        result.error = u8"成功";
+        return true;
+    }
+
+    result.error = u8"通过 TypeInfo 解析 static_fields/GameInstance 失败";
+    return false;
+}
+
+static ResolveResult ResolvePlayerController() {
+    ResolveResult result;
+
+    if (g_gameBaseAddress == 0) {
+        result.error = u8"未找到 GameAssembly.dll";
+        return result;
+    }
+
+    if (ResolveViaGetter(result)) {
+        return result;
+    }
+
+    ResolveResult fallback = result;
+    if (ResolveViaTypeInfo(fallback)) {
+        return fallback;
+    }
+
+    result.error = fallback.error;
+    return result;
+}
+
+static void DrawFloatField(PlayerController* pc, uintptr_t offset, const char* name) {
+    float value = 0.0f;
+    if (ReadPcField(pc, offset, value)) {
+        ImGui::Text("%s (0x%llX): %.4f", name, static_cast<unsigned long long>(offset), value);
+    } else {
+        ImGui::TextDisabled(u8"%s (0x%llX): <读取失败>", name, static_cast<unsigned long long>(offset));
+    }
+}
+
+static void DrawBoolField(PlayerController* pc, uintptr_t offset, const char* name) {
+    bool value = false;
+    if (ReadPcBoolField(pc, offset, value)) {
+        ImGui::Text(u8"%s (0x%llX): %s", name, static_cast<unsigned long long>(offset), value ? u8"是" : u8"否");
+    } else {
+        ImGui::TextDisabled(u8"%s (0x%llX): <读取失败>", name, static_cast<unsigned long long>(offset));
+    }
+}
+
+static void DrawUInt32Field(PlayerController* pc, uintptr_t offset, const char* name) {
+    uint32_t value = 0;
+    if (ReadPcField(pc, offset, value)) {
+        ImGui::Text("%s (0x%llX): %u", name, static_cast<unsigned long long>(offset), value);
+    } else {
+        ImGui::TextDisabled(u8"%s (0x%llX): <读取失败>", name, static_cast<unsigned long long>(offset));
+    }
+}
+
+static void DrawInt32Field(PlayerController* pc, uintptr_t offset, const char* name) {
+    int32_t value = 0;
+    if (ReadPcField(pc, offset, value)) {
+        ImGui::Text("%s (0x%llX): %d", name, static_cast<unsigned long long>(offset), value);
+    } else {
+        ImGui::TextDisabled(u8"%s (0x%llX): <读取失败>", name, static_cast<unsigned long long>(offset));
+    }
+}
+
+static void DrawPointerField(PlayerController* pc, uintptr_t offset, const char* name) {
+    uintptr_t value = 0;
+    if (ReadPcField(pc, offset, value)) {
+        ImGui::Text("%s (0x%llX): %p", name, static_cast<unsigned long long>(offset), reinterpret_cast<void*>(value));
+    } else {
+        ImGui::TextDisabled(u8"%s (0x%llX): <读取失败>", name, static_cast<unsigned long long>(offset));
+    }
+}
+
+static void DrawVec2Field(PlayerController* pc, uintptr_t offset, const char* name) {
+    Vec2 value{};
+    if (ReadPcField(pc, offset, value)) {
+        ImGui::Text("%s (0x%llX): (%.3f, %.3f)", name, static_cast<unsigned long long>(offset), value.x, value.y);
+    } else {
+        ImGui::TextDisabled(u8"%s (0x%llX): <读取失败>", name, static_cast<unsigned long long>(offset));
+    }
+}
+
+static void DrawVec3Field(PlayerController* pc, uintptr_t offset, const char* name) {
+    Vec3 value{};
+    if (ReadPcField(pc, offset, value)) {
+        ImGui::Text("%s (0x%llX): (%.3f, %.3f, %.3f)", name, static_cast<unsigned long long>(offset), value.x, value.y, value.z);
+    } else {
+        ImGui::TextDisabled(u8"%s (0x%llX): <读取失败>", name, static_cast<unsigned long long>(offset));
+    }
+}
+
+static void DrawPlayerControllerHexDump(PlayerController* pc) {
+    const uintptr_t base = reinterpret_cast<uintptr_t>(pc);
+    const size_t dumpSize = static_cast<size_t>(kPlayerControllerDumpBytes);
+
+    if (base == 0 || IsBadReadPtr(reinterpret_cast<void*>(base), dumpSize)) {
+        ImGui::TextDisabled(u8"内存不可读");
+        return;
+    }
+
+    std::array<unsigned char, kPlayerControllerDumpBytes> bytes{};
+    std::memcpy(bytes.data(), reinterpret_cast<void*>(base), dumpSize);
+
+    ImGui::BeginChild("pc_hexdump", ImVec2(0.0f, 240.0f), true);
+    for (size_t i = 0; i < bytes.size(); i += 16) {
+        char line[256] = {};
+        int written = std::snprintf(line, sizeof(line), "+%04llX: ", static_cast<unsigned long long>(i));
+        if (written < 0) {
+            continue;
+        }
+
+        for (size_t j = 0; j < 16 && (i + j) < bytes.size(); ++j) {
+            if (written >= static_cast<int>(sizeof(line))) {
+                break;
+            }
+            written += std::snprintf(line + written, sizeof(line) - written, "%02X ", bytes[i + j]);
+        }
+
+        ImGui::TextUnformatted(line);
+    }
+    ImGui::EndChild();
+}
+
+static void DrawKnownPlayerControllerFields(PlayerController* pc) {
+    DrawPointerField(pc, 0x70, u8"主角色实体(mainCharacter)");
+    DrawPointerField(pc, 0x78, u8"命令控制器(commandController)");
+
+    DrawFloatField(pc, 0x80, u8"最大冲刺次数(maxDashCount)");
+    DrawFloatField(pc, 0x84, u8"当前冲刺次数(currentDashCount)");
+    DrawFloatField(pc, 0x88, u8"界面最大冲刺(lastShownMaxDashCount)");
+    DrawBoolField(pc, 0x8C, u8"冲刺动画显示(dashCountChangeAnimShowing)");
+    DrawBoolField(pc, 0x8D, u8"冲刺透支(isInDashOverdraft)");
+    DrawFloatField(pc, 0x90, u8"透支恢复时间(dashOverdraftRecoverTime)");
+    DrawFloatField(pc, 0x94, u8"主角SP空闲时间(lastMainCharacterSpIdleTime)");
+    DrawFloatField(pc, 0x98, u8"队友SP空闲时间(lastSquadMemberSpIdleTime)");
+    DrawFloatField(pc, 0x9C, u8"距上次冲刺时间(timeFromLastDash)");
+
+    DrawBoolField(pc, 0xA0, u8"上次是否首次冲刺(isLastFirstDash)");
+    DrawBoolField(pc, 0xA1, u8"技能中冲刺(dashInSkill)");
+    DrawBoolField(pc, 0xA2, u8"可刷新偏移(canRefreshOffset)");
+    DrawBoolField(pc, 0xA3, u8"冲刺中(inSprint)");
+    DrawVec2Field(pc, 0xA4, u8"上次冲刺输入(lastSprintInput)");
+    DrawFloatField(pc, 0xAC, u8"无输入冲刺时间(sprintNoInputTime)");
+
+    DrawBoolField(pc, 0xB0, u8"行走状态(isWalk)");
+    DrawBoolField(pc, 0xB1, u8"锁定移动坐标(fixMoveCoordinate)");
+    DrawVec2Field(pc, 0xB4, u8"上次限制输入(lastLimitInput)");
+    DrawVec3Field(pc, 0xBC, u8"固定前向(fixedMoveForward)");
+    DrawVec3Field(pc, 0xC8, u8"固定右向(fixedMoveRight)");
+
+    DrawVec3Field(pc, 0xE0, u8"帧运动(frameMotion)");
+    DrawBoolField(pc, 0xEC, u8"安全区内(isInSaveZone)");
+    DrawBoolField(pc, 0xED, u8"禁用位移推挤(disableMovementPush)");
+    DrawPointerField(pc, 0xF0, u8"输入屏蔽集合(blockPlayerInputHashSet)");
+
+    DrawUInt32Field(pc, 0xF8, u8"当前句柄ID(currentHandleId)");
+    DrawInt32Field(pc, 0xFC, u8"动作启用掩码(playerActionEnableMask)");
+    DrawUInt32Field(pc, 0x100, u8"动作启用句柄(playerActionEnableHandle)");
+    DrawBoolField(pc, 0x104, u8"限制输入X(limitInputX)");
+    DrawVec2Field(pc, 0x108, u8"输入X范围(limitInputRangeX)");
+    DrawBoolField(pc, 0x110, u8"限制输入Y(limitInputY)");
+    DrawVec2Field(pc, 0x114, u8"输入Y范围(limitInputRangeY)");
+    DrawUInt32Field(pc, 0x11C, u8"当前限制轴句柄(currentLimitInputAxisHandle)");
+
+    DrawBoolField(pc, 0x120, u8"普攻施放中(castingNormalAttack)");
+    DrawBoolField(pc, 0x121, u8"终结技施放中(inUltimateCasting)");
+    DrawPointerField(pc, 0x128, u8"普攻事件(onCastingNormalAttack)");
+    DrawFloatField(pc, 0x130, u8"可持续攻击计时(canKeepAttackingTimer)");
+    DrawFloatField(pc, 0x134, u8"持续攻击计时(keepAttackingTimer)");
+    DrawFloatField(pc, 0x138, u8"触屏可持续攻击计时(touchCanKeepAttackTimer)");
+    DrawFloatField(pc, 0x13C, u8"触屏持续攻击计时(touchKeepAttackTimer)");
+    DrawVec2Field(pc, 0x140, u8"缓存原始输入(cachedRawInput)");
+    DrawPointerField(pc, 0x148, u8"冲刺失败事件(onDashFailed)");
+
+    DrawBoolField(pc, 0x150, u8"上次主角是否冲刺(lastIsMainCharacterSprinting)");
+    DrawInt32Field(pc, 0x154, u8"摇杆状态(joystickState)");
+    DrawFloatField(pc, 0x158, u8"摇杆保护计时(joystickProtectionTimer)");
+    DrawVec3Field(pc, 0x15C, u8"摇杆保护位移(joystickProtectionMotion)");
+    DrawFloatField(pc, 0x168, u8"特效上次命中时间(effectLastHitTime)");
+    DrawVec3Field(pc, 0x16C, u8"特效上次命中位置(effectLastHitPos)");
+}
+static void DrawCustomWatchValueEditor(CustomWatchItem& item) {
+    switch (item.valueType) {
+    case CustomValueType::Bool:
+        ImGui::Checkbox(u8"\u5199\u5165\u503c", &item.boolValue);
+        break;
+    case CustomValueType::Int32:
+        ImGui::InputScalar(u8"\u5199\u5165\u503c", ImGuiDataType_S32, &item.i32Value);
+        break;
+    case CustomValueType::UInt32:
+        ImGui::InputScalar(u8"\u5199\u5165\u503c", ImGuiDataType_U32, &item.u32Value);
+        break;
+    case CustomValueType::Int64:
+        ImGui::InputScalar(u8"\u5199\u5165\u503c", ImGuiDataType_S64, &item.i64Value);
+        break;
+    case CustomValueType::UInt64:
+        ImGui::InputScalar(u8"\u5199\u5165\u503c", ImGuiDataType_U64, &item.u64Value);
+        break;
+    case CustomValueType::Float:
+        ImGui::InputFloat(u8"\u5199\u5165\u503c", &item.f32Value, 1.0f, 10.0f, "%.6f");
+        break;
+    case CustomValueType::Double:
+        ImGui::InputDouble(u8"\u5199\u5165\u503c", &item.f64Value, 1.0, 10.0, "%.6f");
+        break;
+    case CustomValueType::Pointer: {
+        uint64_t value = static_cast<uint64_t>(item.ptrValue);
+        if (ImGui::InputScalar(u8"\u5199\u5165\u503c", ImGuiDataType_U64, &value, nullptr, nullptr, "0x%016llX", ImGuiInputTextFlags_CharsHexadecimal)) {
+            item.ptrValue = static_cast<uintptr_t>(value);
+        }
+        break;
+    }
+    case CustomValueType::Byte: {
+        int value = static_cast<int>(item.u8Value);
+        if (ImGui::InputInt(u8"\u5199\u5165\u503c", &value, 1, 16)) {
+            value = (std::max)(0, (std::min)(255, value));
+            item.u8Value = static_cast<uint8_t>(value);
+        }
+        break;
+    }
+    }
+}
+
+static void DrawCustomWatchPanel(
+    PlayerController* pc,
+    Entity* entity,
+    AbilitySystem* ability,
+    uintptr_t gameInstanceAddress) {
+    if (!ImGui::CollapsingHeader(u8"\u81ea\u5b9a\u4e49\u5730\u5740\u76d1\u89c6 / \u4fee\u6539", ImGuiTreeNodeFlags_DefaultOpen)) {
+        return;
+    }
+
+    ImGui::TextDisabled(u8"\u7528\u4e8e\u8ffd\u8e2a\u7ed3\u6784\u4f53\u91cc\u672a\u5217\u51fa\u7684\u5b57\u6bb5\uff0c\u5e76\u652f\u6301\u5b9e\u65f6\u5199\u5165/\u9501\u5b9a\u3002");
+    ImGui::TextDisabled(
+        u8"\u57fa\u5740: PC=%p  \u5b9e\u4f53=%p  \u80fd\u529b=%p  \u6e38\u620f\u5b9e\u4f8b=0x%llX",
+        pc,
+        entity,
+        ability,
+        static_cast<unsigned long long>(gameInstanceAddress));
+
+    int lockCount = 0;
+    for (const CustomWatchItem& item : g_customWatchItems) {
+        if (item.lockWrite) {
+            ++lockCount;
+        }
+    }
+
+    if (lockCount > 0) {
+        ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.2f, 1.0f), u8"\u5df2\u542f\u7528\u9501\u5b9a\u5199\u5165: %d", lockCount);
+    }
+
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.75f, 0.9f, 1.0f, 1.0f), u8"\u65b0\u589e\u76d1\u89c6\u9879");
+
+    ImGui::PushItemWidth(220.0f);
+    ImGui::InputText(u8"\u540d\u79f0", g_customWatchDraft.label, sizeof(g_customWatchDraft.label));
+    ImGui::InputText(u8"\u504f\u79fb/\u5730\u5740(HEX)", g_customWatchDraft.offsetInput, sizeof(g_customWatchDraft.offsetInput));
+    ImGui::PopItemWidth();
+    ImGui::Combo(u8"\u57fa\u5740", &g_customWatchDraft.baseSourceIndex, kCustomBaseSourceItems, IM_ARRAYSIZE(kCustomBaseSourceItems));
+    ImGui::Combo(u8"\u7c7b\u578b", &g_customWatchDraft.valueTypeIndex, kCustomValueTypeItems, IM_ARRAYSIZE(kCustomValueTypeItems));
+
+    if (ImGui::Button(u8"\u6dfb\u52a0\u9879\u76ee")) {
+        uintptr_t parsed = 0;
+        if (!TryParseHex(g_customWatchDraft.offsetInput, parsed)) {
+            SetCustomWatchStatus(u8"\u6dfb\u52a0\u5931\u8d25: HEX \u5730\u5740\u683c\u5f0f\u9519\u8bef", true);
+        } else {
+            CustomWatchItem item;
+            item.id = g_customWatchNextId++;
+            item.offsetOrAddress = parsed;
+            item.parsedOk = true;
+            item.baseSource = ToCustomBaseSource(g_customWatchDraft.baseSourceIndex);
+            item.valueType = ToCustomValueType(g_customWatchDraft.valueTypeIndex);
+            std::snprintf(item.offsetInput, sizeof(item.offsetInput), "0x%llX", static_cast<unsigned long long>(parsed));
+
+            if (IsBlankText(g_customWatchDraft.label)) {
+                std::snprintf(item.label, sizeof(item.label), u8"\u9879\u76ee%d", item.id);
+            } else {
+                std::snprintf(item.label, sizeof(item.label), "%s", g_customWatchDraft.label);
+            }
+
+            g_customWatchItems.push_back(item);
+            SetCustomWatchStatus(u8"\u5df2\u6dfb\u52a0\u76d1\u89c6\u9879", false);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(u8"\u6e05\u7a7a\u5168\u90e8")) {
+        g_customWatchItems.clear();
+        SetCustomWatchStatus(u8"\u5df2\u6e05\u7a7a\u5168\u90e8\u76d1\u89c6\u9879", false);
+    }
+
+    if (g_customWatchStatusText[0] != '\0') {
+        const ImVec4 color = g_customWatchStatusError ? ImVec4(1.0f, 0.35f, 0.35f, 1.0f) : ImVec4(0.6f, 1.0f, 0.6f, 1.0f);
+        ImGui::TextColored(color, u8"\u76d1\u89c6\u72b6\u6001: %s", g_customWatchStatusText);
+    }
+
+    if (g_customWatchItems.empty()) {
+        ImGui::TextDisabled(u8"\u5f53\u524d\u6ca1\u6709\u81ea\u5b9a\u4e49\u76d1\u89c6\u9879");
+        return;
+    }
+
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.75f, 0.9f, 1.0f, 1.0f), u8"\u76d1\u89c6\u9879\u5217\u8868");
+
+    int removeIndex = -1;
+    for (size_t i = 0; i < g_customWatchItems.size(); ++i) {
+        CustomWatchItem& item = g_customWatchItems[i];
+        ImGui::PushID(item.id);
+
+        const char* displayLabel = item.label[0] != '\0' ? item.label : u8"<\u672a\u547d\u540d>";
+        if (ImGui::TreeNodeEx(
+                "custom_watch_item",
+                ImGuiTreeNodeFlags_DefaultOpen,
+                "%s [%s]",
+                displayLabel,
+                kCustomValueTypeItems[static_cast<int>(item.valueType)])) {
+            ImGui::PushItemWidth(220.0f);
+            ImGui::InputText(u8"\u540d\u79f0", item.label, sizeof(item.label));
+            const bool pressedEnter = ImGui::InputText(
+                u8"\u504f\u79fb/\u5730\u5740(HEX)",
+                item.offsetInput,
+                sizeof(item.offsetInput),
+                ImGuiInputTextFlags_EnterReturnsTrue);
+            ImGui::PopItemWidth();
+            ImGui::SameLine();
+            if (ImGui::Button(u8"\u66f4\u65b0\u5730\u5740") || pressedEnter) {
+                if (UpdateCustomWatchOffset(item)) {
+                    SetCustomWatchStatus(u8"\u5730\u5740\u5df2\u66f4\u65b0", false);
+                } else {
+                    SetCustomWatchStatus(u8"\u5730\u5740\u66f4\u65b0\u5931\u8d25: HEX \u683c\u5f0f\u9519\u8bef", true);
+                }
+            }
+
+            int baseSourceIndex = static_cast<int>(item.baseSource);
+            if (ImGui::Combo(u8"\u57fa\u5740", &baseSourceIndex, kCustomBaseSourceItems, IM_ARRAYSIZE(kCustomBaseSourceItems))) {
+                item.baseSource = ToCustomBaseSource(baseSourceIndex);
+            }
+
+            int valueTypeIndex = static_cast<int>(item.valueType);
+            if (ImGui::Combo(u8"\u7c7b\u578b", &valueTypeIndex, kCustomValueTypeItems, IM_ARRAYSIZE(kCustomValueTypeItems))) {
+                item.valueType = ToCustomValueType(valueTypeIndex);
+            }
+
+            if (!item.parsedOk) {
+                ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), u8"HEX \u5730\u5740\u683c\u5f0f\u9519\u8bef");
+            }
+
+            const uintptr_t resolvedAddress = ResolveCustomWatchAddress(item, pc, entity, ability, gameInstanceAddress);
+            ImGui::Text(u8"\u89e3\u6790\u540e\u7684\u5730\u5740: 0x%llX", static_cast<unsigned long long>(resolvedAddress));
+
+            if (resolvedAddress == 0) {
+                ImGui::TextDisabled(u8"\u5f53\u524d\u9009\u5b9a\u57fa\u5740\u4e0d\u53ef\u7528");
+            } else {
+                char currentValueText[128] = {};
+                if (ReadCustomWatchValueText(item, resolvedAddress, currentValueText, sizeof(currentValueText))) {
+                    ImGui::Text(u8"\u5f53\u524d\u503c: %s", currentValueText);
+                } else {
+                    ImGui::TextDisabled(u8"\u5f53\u524d\u503c: <\u8bfb\u53d6\u5931\u8d25>");
+                }
+
+                DrawCustomWatchValueEditor(item);
+
+                if (ImGui::Button(u8"\u8bfb\u53d6\u5230\u5199\u5165\u503c")) {
+                    const bool ok = ReadCustomWatchValue(item, resolvedAddress);
+                    SetCustomWatchStatus(ok ? u8"\u5df2\u4ece\u5185\u5b58\u540c\u6b65\u5230\u5199\u5165\u503c" : u8"\u540c\u6b65\u8bfb\u53d6\u5931\u8d25", !ok);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button(u8"\u5199\u5165\u4e00\u6b21")) {
+                    const bool ok = WriteCustomWatchValue(item, resolvedAddress);
+                    SetCustomWatchStatus(ok ? u8"\u5199\u5165\u6210\u529f" : u8"\u5199\u5165\u5931\u8d25", !ok);
+                }
+                ImGui::SameLine();
+                ImGui::Checkbox(u8"\u9501\u5b9a\u5199\u5165", &item.lockWrite);
+            }
+
+            if (ImGui::Button(u8"\u5220\u9664\u9879\u76ee")) {
+                removeIndex = static_cast<int>(i);
+            }
+
+            ImGui::TreePop();
+        }
+
+        ImGui::PopID();
+    }
+
+    if (removeIndex >= 0) {
+        g_customWatchItems.erase(g_customWatchItems.begin() + removeIndex);
+        SetCustomWatchStatus(u8"\u76d1\u89c6\u9879\u5df2\u5220\u9664", false);
+    }
+}
+
+} // namespace
+
+void DrawPlayerDebugWindow() {
+
+    static bool showWindow = true;
+    static bool initializedDefaultOffset = false;
+
+    if (!showWindow) {
+        return;
+    }
+
+    InitGameBase();
+    EnsureFastUltimateThread();
+
+    if (!initializedDefaultOffset) {
+        uintptr_t parsed = 0;
+        if (TryParseHex(g_offsetInput, parsed)) {
+            g_typeInfoOffset = parsed;
+            std::snprintf(g_statusText, sizeof(g_statusText), u8"已加载默认偏移");
+            g_statusError = false;
+        }
+        initializedDefaultOffset = true;
+    }
+
+    ImGui::SetNextWindowSize(ImVec2(680, 920), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin(u8"终末地 角色数据面板", &showWindow)) {
+        ImGui::End();
+        return;
+    }
+
+    if (ImGui::CollapsingHeader(u8"高级定位设置")) {
+        ImGui::PushItemWidth(240.0f);
+        const bool pressedEnter = ImGui::InputText(u8"TypeInfo偏移(HEX)", g_offsetInput, sizeof(g_offsetInput), ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::PopItemWidth();
+        ImGui::SameLine();
+        bool clickedApply = ImGui::Button(u8"应用");
+        ImGui::SameLine();
+        if (ImGui::Button(u8"使用 0xFC2FA18")) {
+            std::snprintf(g_offsetInput, sizeof(g_offsetInput), "0xFC2FA18");
+            clickedApply = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(u8"清空")) {
+            g_typeInfoOffset = 0;
+            std::snprintf(g_offsetInput, sizeof(g_offsetInput), "0x0");
+            std::snprintf(g_statusText, sizeof(g_statusText), u8"已清空");
+            g_statusError = false;
+        }
+
+        if (pressedEnter || clickedApply) {
+            uintptr_t parsed = 0;
+            if (TryParseHex(g_offsetInput, parsed)) {
+                g_typeInfoOffset = parsed;
+                std::snprintf(g_statusText, sizeof(g_statusText), u8"偏移已应用");
+                g_statusError = false;
+            } else {
+                std::snprintf(g_statusText, sizeof(g_statusText), u8"十六进制格式错误");
+                g_statusError = true;
+            }
+        }
+
+        if (g_statusText[0] != '\0') {
+            const ImVec4 color = g_statusError ? ImVec4(1.0f, 0.35f, 0.35f, 1.0f) : ImVec4(0.6f, 1.0f, 0.6f, 1.0f);
+            ImGui::TextColored(color, u8"状态: %s", g_statusText);
+        }
+
+        ImGui::Text(u8"游戏基址: 0x%llX", static_cast<unsigned long long>(g_gameBaseAddress));
+    }
+
+    ImGui::Separator();
+
+    const ResolveResult resolved = ResolvePlayerController();
+    if (!resolved.ok) {
+        ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), u8"解析失败: %s", resolved.error);
+        ImGui::End();
+        return;
+    }
+
+    PlayerController* pc = resolved.playerController;
+    ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.5f, 1.0f), u8"解析成功，角色指针: %p", pc);
+
+    Entity* entity = pc->mainCharacter;
+    Entity* entityFromGameInstance = nullptr;
+    if (TryCallGameInstanceGetMainChar(resolved.gameInstanceAddress, entityFromGameInstance)) {
+        entity = entityFromGameInstance;
+    }
+
+    AbilitySystem* abilityForCustomPanel = nullptr;
+    if (IsValidPtr(entity)) {
+        abilityForCustomPanel = entity->abilityCom;
+
+        AbilitySystem* abilityFromGetter = nullptr;
+        if (TryCallEntityGetAbilityCom(entity, abilityFromGetter)) {
+            abilityForCustomPanel = abilityFromGetter;
+        }
+    }
+
+    UpdateFastUltimateTarget(abilityForCustomPanel, pc, resolved.gameInstanceAddress);
+    ApplyLockedCustomWatchItems(pc, entity, abilityForCustomPanel, resolved.gameInstanceAddress);
+    if (IsValidPtr(entity)) {
+        ApplyTeleportHoldIfNeeded(entity);
+    }
+
+    if (!IsValidPtr(entity) || !IsValidPtr(abilityForCustomPanel)) {
+        ImGui::TextDisabled(u8"当前无法获取角色能力组件，请进入战斗后再试。");
+        DrawCustomWatchPanel(pc, entity, abilityForCustomPanel, resolved.gameInstanceAddress);
+        ImGui::End();
+        return;
+    }
+
+    AbilitySystem* ability = abilityForCustomPanel;
+
+    double hpMethod = 0.0;
+    double serverHpMethod = 0.0;
+    float spMethod = 0.0f;
+    const bool hpByMethod = TryCallAbilityGetHp(ability, hpMethod);
+    const bool serverHpByMethod = TryCallAbilityGetServerHp(ability, serverHpMethod);
+    const bool spByMethod = TryCallAbilityGetUltimateSp(ability, spMethod);
+
+    float skillCooldownMethod = 1.0f;
+    const bool skillCooldownByMethod = TryCallAbilityGetSkillCooldownScalar(ability, skillCooldownMethod);
+    double skillCooldownRaw = static_cast<double>(skillCooldownMethod);
+    if (!skillCooldownByMethod && !TryReadAttributeDoubleByIndex(ability, kAttrIndexSkillCooldownScalar, skillCooldownRaw)) {
+        skillCooldownRaw = 1.0;
+    }
+    const float skillCooldownFinal = static_cast<float>(skillCooldownRaw);
+
+    double skillCooldownAdditionRaw = 0.0;
+    if (!TryReadAttributeDoubleByIndex(ability, kAttrIndexSkillCooldownAddition, skillCooldownAdditionRaw)) {
+        skillCooldownAdditionRaw = 0.0;
+    }
+    const float skillCooldownAdditionFinal = static_cast<float>(skillCooldownAdditionRaw);
+
+    double atbCostAdditionRaw = 0.0;
+    if (!TryReadAttributeDoubleByIndex(ability, kAttrIndexAtbCostAddition, atbCostAdditionRaw)) {
+        atbCostAdditionRaw = 0.0;
+    }
+    const float atbCostAdditionFinal = static_cast<float>(atbCostAdditionRaw);
+
+    double ultimateSpGainRaw = 1.0;
+    if (!TryReadAttributeDoubleByIndex(ability, kAttrIndexUltimateSpGainScalar, ultimateSpGainRaw)) {
+        ultimateSpGainRaw = 1.0;
+    }
+    const float ultimateSpGainFinal = static_cast<float>(ultimateSpGainRaw);
+
+    double criticalRateRaw = 1.0;
+    if (!TryReadAttributeDoubleByIndex(ability, kAttrIndexCriticalRate, criticalRateRaw)) {
+        criticalRateRaw = 1.0;
+    }
+    const float criticalRateFinal = static_cast<float>(criticalRateRaw);
+
+    std::array<double, 11> damageIncreaseValues = {0.0};
+    const std::array<int, 11> damageIncreaseIndices = {
+        kAttrIndexNormalAttackDamageIncrease,
+        kAttrIndexNormalSkillDamageIncrease,
+        kAttrIndexComboSkillDamageIncrease,
+        kAttrIndexUltimateSkillDamageIncrease,
+        kAttrIndexPhysicalDamageIncrease,
+        kAttrIndexFireDamageIncrease,
+        kAttrIndexPulseDamageIncrease,
+        kAttrIndexCrystDamageIncrease,
+        kAttrIndexNaturalDamageIncrease,
+        kAttrIndexEtherDamageIncrease,
+        kAttrIndexCriticalDamageIncrease};
+
+    double maxDamageIncrease = 0.0;
+    for (size_t i = 0; i < damageIncreaseIndices.size(); ++i) {
+        double value = 0.0;
+        if (TryReadAttributeDoubleByIndex(ability, damageIncreaseIndices[i], value)) {
+            damageIncreaseValues[i] = value;
+            if (value > maxDamageIncrease) {
+                maxDamageIncrease = value;
+            }
+        }
+    }
+    const float damageMultiplierFinal = static_cast<float>((std::max)(1.0, 1.0 + maxDamageIncrease));
+
+    double hpClientRaw = 0.0;
+    double hpServerRaw = 0.0;
+    TryReadAbilityHpPair(ability, hpClientRaw, hpServerRaw);
+
+    const double hpFinal = hpByMethod ? hpMethod : hpClientRaw;
+    const double serverHpFinal = serverHpByMethod ? serverHpMethod : hpServerRaw;
+    const float ultimateSpFinal = spByMethod ? spMethod : ability->m_ultimateSp;
+    float atbFinal = ability->m_ap;
+    ReadValue<float>(reinterpret_cast<uintptr_t>(ability) + 0x150, atbFinal);
+
+    if (!g_statEditor.initializedFromGame) {
+        g_statEditor.hpClient = hpFinal;
+        g_statEditor.hpServer = serverHpFinal;
+        g_statEditor.skillCooldownScalar = skillCooldownFinal;
+        g_statEditor.skillCooldownAddition = skillCooldownAdditionFinal;
+        g_statEditor.atbCostAddition = atbCostAdditionFinal;
+        g_statEditor.atbValue = atbFinal;
+        g_statEditor.ultimateSpGainScalar = ultimateSpGainFinal;
+        g_statEditor.ultimateSp = ultimateSpFinal;
+        g_statEditor.currentDash = pc->currentDashCount;
+        g_statEditor.maxDash = pc->maxDashCount;
+        g_statEditor.criticalRate = criticalRateFinal;
+        g_statEditor.damageMultiplier = damageMultiplierFinal;
+        g_statEditor.initializedFromGame = true;
+    }
+
+    if (AnyLockEnabled()) {
+        ApplyEditedValues(pc, ability, resolved.gameInstanceAddress, true);
+    }
+
+    ImGui::Text(u8"生命值(HP): %.2f %s", hpFinal, hpByMethod ? u8"(函数)" : u8"(内存)");
+    ImGui::Text(u8"服务器HP: %.2f %s", serverHpFinal, serverHpByMethod ? u8"(函数)" : u8"(内存)");
+    ImGui::Text(u8"技能CD倍率[0x10]: %.3f %s", skillCooldownFinal, skillCooldownByMethod ? u8"(函数)" : u8"(属性)");
+    ImGui::Text(u8"技能CD附加[0x2F]: %.3f", skillCooldownAdditionFinal);
+    ImGui::Text(u8"蓝耗附加[0x2E]: %.3f", atbCostAdditionFinal);
+    ImGui::Text(u8"\u84dd\u6761\u503c(AP/ATB)[0x150]: %.3f", atbFinal);
+    ImGui::Text(u8"终结技SP回复倍率[0x2D]: %.3f", ultimateSpGainFinal);
+    ImGui::Text(u8"终结技SP: %.3f %s", ultimateSpFinal, spByMethod ? u8"(函数)" : u8"(内存)");
+    ImGui::Text(u8"\u66b4\u51fb\u7387[0x09]: %.3f (%.1f%%)", criticalRateFinal, criticalRateFinal * 100.0f);
+    ImGui::Text(u8"\u4f24\u5bb3\u500d\u7387(\u7efc\u5408): x%.3f", damageMultiplierFinal);
+
+    if (ImGui::TreeNode(u8"数值修改与锁定")) {
+        if (ImGui::Button(u8"读取当前值")) {
+            g_statEditor.hpClient = hpFinal;
+            g_statEditor.hpServer = serverHpFinal;
+            g_statEditor.skillCooldownScalar = skillCooldownFinal;
+            g_statEditor.skillCooldownAddition = skillCooldownAdditionFinal;
+            g_statEditor.atbCostAddition = atbCostAdditionFinal;
+            g_statEditor.atbValue = atbFinal;
+            g_statEditor.ultimateSpGainScalar = ultimateSpGainFinal;
+            g_statEditor.ultimateSp = ultimateSpFinal;
+            g_statEditor.currentDash = pc->currentDashCount;
+            g_statEditor.maxDash = pc->maxDashCount;
+            g_statEditor.criticalRate = criticalRateFinal;
+            g_statEditor.damageMultiplier = damageMultiplierFinal;
+            std::snprintf(g_editStatusText, sizeof(g_editStatusText), u8"已读取当前数值");
+            g_editStatusError = false;
+            if (g_statEditor.lockInfiniteBlueNoCd) {
+                SetInfiniteBlueNoCdPreset(true);
+            }
+            if (g_statEditor.lockAllSquadUltimateNoCd) {
+                SetAllSquadUltimateNoCdPreset(true);
+            }
+            if (g_statEditor.lockInfiniteStamina) {
+                SetInfiniteStaminaPreset(true);
+            }
+            if (g_statEditor.lockInfiniteBlink) {
+                SetInfiniteBlinkPreset(true);
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(u8"应用一次")) {
+            const bool ok = ApplyEditedValues(pc, ability, resolved.gameInstanceAddress, false);
+            std::snprintf(g_editStatusText, sizeof(g_editStatusText), ok ? u8"应用成功" : u8"应用失败");
+            g_editStatusError = !ok;
+        }
+
+        if (ImGui::Checkbox(u8"无限蓝条 + 无技能CD(推荐)", &g_statEditor.lockInfiniteBlueNoCd)) {
+            SetInfiniteBlueNoCdPreset(g_statEditor.lockInfiniteBlueNoCd);
+        }
+        ImGui::TextDisabled(u8"预设会持续写入 0x10/0x2F/0x2E/0x2D 及 终结技SP 值。");
+
+        if (ImGui::Checkbox(u8"\u5f53\u524d4\u4eba\u7ec8\u7ed3\u6280\u65e0CD", &g_statEditor.lockAllSquadUltimateNoCd)) {
+            SetAllSquadUltimateNoCdPreset(g_statEditor.lockAllSquadUltimateNoCd);
+        }
+
+        if (ImGui::Checkbox(u8"\u65e0\u9650\u8010\u529b", &g_statEditor.lockInfiniteStamina)) {
+            SetInfiniteStaminaPreset(g_statEditor.lockInfiniteStamina);
+        }
+
+        if (ImGui::Checkbox(u8"\u65e0\u9650\u95ea\u73b0", &g_statEditor.lockInfiniteBlink)) {
+            SetInfiniteBlinkPreset(g_statEditor.lockInfiniteBlink);
+        }
+
+        ImGui::Checkbox(u8"强制无CD校验绕过(全技能)", &g_statEditor.lockNoCooldownBypass);
+
+        ImGui::InputDouble(u8"生命值(客户端)", &g_statEditor.hpClient, 10.0, 100.0, "%.2f");
+        ImGui::SameLine();
+        ImGui::Checkbox(u8"锁定##lock_hp_client", &g_statEditor.lockHpClient);
+
+        ImGui::InputDouble(u8"生命值(服务器)", &g_statEditor.hpServer, 10.0, 100.0, "%.2f");
+        ImGui::SameLine();
+        ImGui::Checkbox(u8"锁定##lock_hp_server", &g_statEditor.lockHpServer);
+
+        ImGui::InputFloat(u8"技能CD倍率(0x10)", &g_statEditor.skillCooldownScalar, 0.01f, 0.1f, "%.3f");
+        ImGui::SameLine();
+        ImGui::Checkbox(u8"锁定##lock_skill_cd", &g_statEditor.lockSkillCooldown);
+
+        ImGui::InputFloat(u8"技能CD附加(0x2F)", &g_statEditor.skillCooldownAddition, 0.5f, 5.0f, "%.3f");
+        ImGui::SameLine();
+        ImGui::Checkbox(u8"锁定##lock_skill_cd_add", &g_statEditor.lockSkillCooldownAddition);
+
+        ImGui::InputFloat(u8"蓝耗附加(0x2E)", &g_statEditor.atbCostAddition, 0.5f, 5.0f, "%.3f");
+        ImGui::SameLine();
+        ImGui::Checkbox(u8"锁定##lock_atb_add", &g_statEditor.lockAtbCostAddition);
+
+        ImGui::InputFloat(u8"\u84dd\u6761\u503c(AP/ATB,0x150)", &g_statEditor.atbValue, 1.0f, 10.0f, "%.3f");
+        ImGui::SameLine();
+        ImGui::Checkbox(u8"\u9501\u5b9a##lock_atb_value", &g_statEditor.lockAtbValue);
+
+        ImGui::InputFloat(u8"终结技SP回复倍率(0x2D)", &g_statEditor.ultimateSpGainScalar, 0.1f, 1.0f, "%.3f");
+        ImGui::SameLine();
+        ImGui::Checkbox(u8"锁定##lock_sp_gain", &g_statEditor.lockUltimateSpGainScalar);
+
+        ImGui::InputFloat(u8"终结技SP", &g_statEditor.ultimateSp, 1.0f, 10.0f, "%.3f");
+        ImGui::SameLine();
+        ImGui::Checkbox(u8"锁定##lock_usp", &g_statEditor.lockUltimateSp);
+
+        ImGui::InputFloat(u8"\u66b4\u51fb\u7387(0x09, 1.0=100%)", &g_statEditor.criticalRate, 0.01f, 0.05f, "%.3f");
+        g_statEditor.criticalRate = (std::max)(0.0f, g_statEditor.criticalRate);
+        ImGui::SameLine();
+        ImGui::Checkbox(u8"\u9501\u5b9a##lock_critical_rate", &g_statEditor.lockCriticalRate);
+
+        ImGui::InputFloat(u8"\u4f24\u5bb3\u500d\u7387(1.0=\u539f\u59cb)", &g_statEditor.damageMultiplier, 0.1f, 0.5f, "%.3f");
+        g_statEditor.damageMultiplier = (std::max)(1.0f, g_statEditor.damageMultiplier);
+        ImGui::SameLine();
+        ImGui::Checkbox(u8"\u9501\u5b9a##lock_damage_multiplier", &g_statEditor.lockDamageMultiplier);
+
+        ImGui::InputFloat(u8"当前冲刺次数", &g_statEditor.currentDash, 1.0f, 5.0f, "%.3f");
+        ImGui::SameLine();
+        ImGui::Checkbox(u8"锁定##lock_cur_dash", &g_statEditor.lockCurrentDash);
+
+        ImGui::InputFloat(u8"最大冲刺次数", &g_statEditor.maxDash, 1.0f, 5.0f, "%.3f");
+        ImGui::SameLine();
+        ImGui::Checkbox(u8"锁定##lock_max_dash", &g_statEditor.lockMaxDash);
+
+        if (g_editStatusText[0] != '\0') {
+            const ImVec4 statusColor = g_editStatusError ? ImVec4(1.0f, 0.35f, 0.35f, 1.0f) : ImVec4(0.6f, 1.0f, 0.6f, 1.0f);
+            ImGui::TextColored(statusColor, u8"修改状态: %s", g_editStatusText);
+        }
+
+        if (AnyLockEnabled()) {
+            ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.2f, 1.0f), u8"锁定已启用：每帧持续写入选中项");
+        } else {
+            ImGui::TextDisabled(u8"当前未启用锁定");
+        }
+
+        ImGui::TreePop();
+    }
+
+    if (ImGui::TreeNode(u8"\u5b9d\u7bb1\u4e0e\u4f20\u9001\u5de5\u5177")) {
+        Vec3 playerPos{};
+        const bool hasPlayerPos = TryReadEntityPosition(entity, playerPos);
+        if (hasPlayerPos) {
+            ImGui::Text(u8"\u5f53\u524d\u4f4d\u7f6e: X %.2f  Y %.2f  Z %.2f", playerPos.x, playerPos.y, playerPos.z);
+            if (!g_treasureTool.customTeleportInitialized) {
+                g_treasureTool.customTeleport[0] = playerPos.x;
+                g_treasureTool.customTeleport[1] = playerPos.y;
+                g_treasureTool.customTeleport[2] = playerPos.z;
+                g_treasureTool.customTeleportInitialized = true;
+            }
+        } else {
+            ImGui::TextDisabled(u8"\u5f53\u524d\u4f4d\u7f6e\u8bfb\u53d6\u5931\u8d25\uff0c\u8bf7\u5148\u8fdb\u5165\u53ef\u64cd\u4f5c\u573a\u666f");
+        }
+
+        ImGui::Checkbox(u8"\u5c4f\u5e55\u900f\u89c6\u663e\u793a(ESP)", &g_treasureTool.enableScreenEsp);
+        ImGui::SameLine();
+        ImGui::Checkbox(u8"ESP\u663e\u793a\u5750\u6807", &g_treasureTool.espShowCoordinates);
+        ImGui::Checkbox(u8"\u4f20\u9001\u6297\u62c9\u56de\u4fdd\u6301", &g_treasureTool.enableTeleportHold);
+        ImGui::SliderInt(u8"\u4fdd\u6301\u6beb\u79d2", &g_treasureTool.teleportHoldMs, 200, 15000);
+        g_treasureTool.teleportHoldMs = (std::max)(200, g_treasureTool.teleportHoldMs);
+        ImGui::SliderInt(u8"ESP\u5de6\u4e0a\u5217\u8868\u6570", &g_treasureTool.espListMaxCount, 5, 60);
+        g_treasureTool.espListMaxCount = (std::max)(5, (std::min)(60, g_treasureTool.espListMaxCount));
+
+        ImGui::Checkbox(u8"\u7ed8\u5236\u6240\u6709\u53ef\u4ea4\u4e92\u5bf9\u8c61", &g_treasureTool.drawAllInteractives);
+        ImGui::SameLine();
+        ImGui::Checkbox(u8"\u6309\u8ddd\u79bb\u9650\u5236", &g_treasureTool.limitByDistance);
+        ImGui::InputText(u8"\u6a21\u677fID\u8fc7\u6ee4", g_treasureTool.templateIdFilter, sizeof(g_treasureTool.templateIdFilter));
+        ImGui::Checkbox(u8"\u6a21\u677fID\u7cbe\u786e\u5339\u914d", &g_treasureTool.templateIdExactMatch);
+
+        bool needRefresh = false;
+        bool manualRefresh = false;
+        const uint64_t nowTick = GetTickCount64();
+
+        if (ImGui::Button(u8"\u5237\u65b0\u5b9d\u7bb1\u5217\u8868")) {
+            needRefresh = true;
+            manualRefresh = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(u8"\u5750\u6807\u586b\u5165\u5f53\u524d\u4f4d\u7f6e")) {
+            if (hasPlayerPos) {
+                g_treasureTool.customTeleport[0] = playerPos.x;
+                g_treasureTool.customTeleport[1] = playerPos.y;
+                g_treasureTool.customTeleport[2] = playerPos.z;
+                g_treasureTool.customTeleportInitialized = true;
+                SetTreasureStatus(u8"\u5df2\u540c\u6b65\u5f53\u524d\u4f4d\u7f6e\u5230\u4f20\u9001\u5750\u6807", false);
+            } else {
+                SetTreasureStatus(u8"\u540c\u6b65\u5931\u8d25\uff1a\u5f53\u524d\u4f4d\u7f6e\u4e0d\u53ef\u7528", true);
+            }
+        }
+
+        if (ImGui::Checkbox(u8"\u4ec5\u663e\u793a\u5b9d\u7bb1\u5173\u952e\u5b57", &g_treasureTool.onlyChestKeyword)) {
+            needRefresh = true;
+        }
+        ImGui::SameLine();
+        ImGui::Checkbox(u8"\u663e\u793a\u96f7\u8fbe", &g_treasureTool.showRadar);
+        ImGui::SameLine();
+        ImGui::Checkbox(u8"\u663e\u793a\u5217\u8868", &g_treasureTool.showChestList);
+
+        if (ImGui::SliderFloat(u8"\u626b\u63cf\u534a\u5f84(0=\u4e0d\u9650)", &g_treasureTool.scanRange, 0.0f, 5000.0f, "%.0f")) {
+            needRefresh = true;
+        }
+        ImGui::SliderFloat(u8"\u96f7\u8fbe\u8303\u56f4(\u7c73)", &g_treasureTool.radarRange, 30.0f, 350.0f, "%.0f");
+        ImGui::InputFloat(u8"\u4f20\u9001\u9ad8\u5ea6\u504f\u79fb", &g_treasureTool.teleportHeightOffset, 0.1f, 1.0f, "%.2f");
+        if (g_treasureTool.scanRange < 0.0f) {
+            g_treasureTool.scanRange = 0.0f;
+        }
+        g_treasureTool.radarRange = (std::max)(30.0f, g_treasureTool.radarRange);
+
+        const bool canScanChest = hasPlayerPos && IsCanonicalUserPtr(resolved.gameInstanceAddress);
+        if (!needRefresh && nowTick - g_lastChestRefreshTick >= 350) {
+            needRefresh = true;
+        }
+
+        if (needRefresh) {
+            if (canScanChest) {
+                RefreshNearbyChestCache(resolved.gameInstanceAddress, playerPos, g_treasureTool.scanRange, g_treasureTool.onlyChestKeyword, g_nearbyChests);
+                g_lastChestRefreshTick = nowTick;
+                if (g_treasureTool.selectedChestIndex >= static_cast<int>(g_nearbyChests.size())) {
+                    g_treasureTool.selectedChestIndex = g_nearbyChests.empty() ? -1 : 0;
+                }
+                if (manualRefresh) {
+                    char refreshText[96] = {};
+                    std::snprintf(refreshText, sizeof(refreshText), u8"\u5237\u65b0\u5b8c\u6210\uff1a\u53d1\u73b0 %d \u4e2a\u76ee\u6807", static_cast<int>(g_nearbyChests.size()));
+                    SetTreasureStatus(refreshText, false);
+                }
+            } else if (manualRefresh) {
+                SetTreasureStatus(u8"\u5237\u65b0\u5931\u8d25\uff1a\u8bf7\u5148\u8fdb\u5165\u573a\u666f\u5e76\u4fdd\u8bc1\u5750\u6807\u53ef\u8bfb", true);
+            }
+        }
+
+        if (g_treasureTool.showRadar) {
+            if (hasPlayerPos) {
+                DrawChestRadar(g_nearbyChests, playerPos, g_treasureTool.radarRange, g_treasureTool.selectedChestIndex);
+            } else {
+                ImGui::TextDisabled(u8"\u96f7\u8fbe\u4e0d\u53ef\u7528\uff1a\u5f53\u524d\u4f4d\u7f6e\u8bfb\u53d6\u5931\u8d25");
+            }
+        }
+
+        if (g_treasureTool.showChestList) {
+            ImGui::Text(u8"\u53ef\u4ea4\u4e92\u5bf9\u8c61\u6570\u91cf: %d", static_cast<int>(g_nearbyChests.size()));
+            ImGui::BeginChild("nearby_chest_list", ImVec2(0, 240), true);
+            for (size_t i = 0; i < g_nearbyChests.size(); ++i) {
+                const auto& chest = g_nearbyChests[i];
+                char rowText[512] = {};
+                const char* nameText = chest.name.empty() ? "<unnamed>" : chest.name.c_str();
+                std::snprintf(rowText,
+                              sizeof(rowText),
+                              "[%03d] %.1fm UID:%u SID:%llu %s",
+                              static_cast<int>(i) + 1,
+                              chest.distance,
+                              chest.instanceUid,
+                              static_cast<unsigned long long>(chest.serverId),
+                              nameText);
+                const bool selected = g_treasureTool.selectedChestIndex == static_cast<int>(i);
+                if (ImGui::Selectable(rowText, selected)) {
+                    g_treasureTool.selectedChestIndex = static_cast<int>(i);
+                }
+                if (selected) {
+                    ImGui::TextDisabled("Template:%s", chest.templateId.empty() ? "-" : chest.templateId.c_str());
+                    ImGui::TextDisabled("Addr:0x%llX", static_cast<unsigned long long>(chest.entityAddress));
+                }
+            }
+            ImGui::EndChild();
+        }
+
+        if (g_treasureTool.selectedChestIndex >= 0 &&
+            g_treasureTool.selectedChestIndex < static_cast<int>(g_nearbyChests.size())) {
+            const auto& selected = g_nearbyChests[static_cast<size_t>(g_treasureTool.selectedChestIndex)];
+            ImGui::Text(u8"\u9009\u4e2d\u76ee\u6807: %.1fm  UID:%u  SID:%llu", selected.distance, selected.instanceUid, static_cast<unsigned long long>(selected.serverId));
+            ImGui::Text(u8"\u5750\u6807: X %.2f  Y %.2f  Z %.2f", selected.position.x, selected.position.y, selected.position.z);
+            ImGui::TextWrapped(u8"\u6a21\u677fID: %s", selected.templateId.empty() ? "-" : selected.templateId.c_str());
+            ImGui::Text("Addr: 0x%llX", static_cast<unsigned long long>(selected.entityAddress));
+            ImGui::Text(u8"\u5173\u952e\u5b57\u5339\u914d: %s", selected.keywordMatched ? u8"\u662f" : u8"\u5426");
+
+            if (ImGui::Button(u8"\u4f20\u9001\u5230\u9009\u4e2d\u76ee\u6807")) {
+                Vec3 target = selected.position;
+                target.y += g_treasureTool.teleportHeightOffset;
+                const bool ok = TeleportEntityTo(entity, target);
+                if (ok) {
+                    g_treasureTool.customTeleport[0] = target.x;
+                    g_treasureTool.customTeleport[1] = target.y;
+                    g_treasureTool.customTeleport[2] = target.z;
+                    g_treasureTool.customTeleportInitialized = true;
+                    BeginTeleportHold(target);
+                }
+                SetTreasureStatus(ok ? u8"\u5df2\u4f20\u9001\u5230\u9009\u4e2d\u76ee\u6807" : u8"\u4f20\u9001\u5931\u8d25", !ok);
+            }
+        } else {
+            ImGui::TextDisabled(u8"\u672a\u9009\u4e2d\u76ee\u6807");
+        }
+
+        ImGui::InputFloat3(u8"\u81ea\u5b9a\u4e49\u4f20\u9001\u5750\u6807(XYZ)", g_treasureTool.customTeleport, "%.3f");
+        if (ImGui::Button(u8"\u4f20\u9001\u5230\u5750\u6807")) {
+            const Vec3 target = {
+                g_treasureTool.customTeleport[0],
+                g_treasureTool.customTeleport[1],
+                g_treasureTool.customTeleport[2]};
+            const bool ok = TeleportEntityTo(entity, target);
+            if (ok) {
+                BeginTeleportHold(target);
+            }
+            SetTreasureStatus(ok ? u8"\u5df2\u4f20\u9001\u5230\u81ea\u5b9a\u4e49\u5750\u6807" : u8"\u4f20\u9001\u5931\u8d25\uff1a\u5750\u6807\u6216\u5b9e\u4f53\u65e0\u6548", !ok);
+        }
+
+        if (g_treasureTool.statusText[0] != '\0') {
+            const ImVec4 statusColor = g_treasureTool.statusError
+                                           ? ImVec4(1.0f, 0.35f, 0.35f, 1.0f)
+                                           : ImVec4(0.6f, 1.0f, 0.6f, 1.0f);
+            ImGui::TextColored(statusColor, u8"\u5b9d\u7bb1\u5de5\u5177\u72b6\u6001: %s", g_treasureTool.statusText);
+        }
+
+        ImGui::TreePop();
+    }
+
+    DrawCustomWatchPanel(pc, entity, abilityForCustomPanel, resolved.gameInstanceAddress);
+
+    ImGui::End();
+}
+
+
+
+void DrawTreasureEspOverlay() {
+    InitGameBase();
+    EnsureTypeInfoOffsetInitialized();
+    if (g_gameBaseAddress == 0) {
+        return;
+    }
+
+    const ResolveResult resolved = ResolvePlayerController();
+    if (!resolved.ok || !IsValidPtr(resolved.playerController)) {
+        return;
+    }
+
+    Entity* entity = resolved.playerController->mainCharacter;
+    Entity* entityFromGameInstance = nullptr;
+    if (TryCallGameInstanceGetMainChar(resolved.gameInstanceAddress, entityFromGameInstance)) {
+        entity = entityFromGameInstance;
+    }
+    if (!IsValidPtr(entity)) {
+        return;
+    }
+
+    // Keep writing teleport target even when menu window is closed.
+    ApplyTeleportHoldIfNeeded(entity);
+
+    Vec3 playerPos{};
+    if (!TryReadEntityPosition(entity, playerPos)) {
+        return;
+    }
+
+    const uint64_t nowTick = GetTickCount64();
+    if (g_nearbyChests.empty() || nowTick - g_lastChestRefreshTick >= 250) {
+        RefreshNearbyChestCache(resolved.gameInstanceAddress, playerPos, g_treasureTool.scanRange, g_treasureTool.onlyChestKeyword, g_nearbyChests);
+        g_lastChestRefreshTick = nowTick;
+        if (g_treasureTool.selectedChestIndex >= static_cast<int>(g_nearbyChests.size())) {
+            g_treasureTool.selectedChestIndex = g_nearbyChests.empty() ? -1 : 0;
+        }
+    }
+
+    if (!g_treasureTool.enableScreenEsp) {
+        return;
+    }
+
+    ImDrawList* draw = ImGui::GetForegroundDrawList();
+    if (!draw) {
+        return;
+    }
+
+    uintptr_t cameraAddress = 0;
+    const bool hasCamera = TryCallGameUtilGetMainCamera(cameraAddress);
+
+    int projectedCount = 0;
+    if (hasCamera) {
+        for (size_t i = 0; i < g_nearbyChests.size(); ++i) {
+            const NearbyChestInfo& chest = g_nearbyChests[i];
+            ImVec2 screenPos;
+            if (!TryWorldToScreen(cameraAddress, chest.position, screenPos)) {
+                continue;
+            }
+
+            ++projectedCount;
+            const bool isSelected = static_cast<int>(i) == g_treasureTool.selectedChestIndex;
+            const ImU32 textColor = isSelected ? IM_COL32(255, 220, 80, 255) : IM_COL32(255, 120, 80, 240);
+            const ImU32 dotColor = isSelected ? IM_COL32(255, 210, 60, 255) : IM_COL32(255, 70, 70, 230);
+            draw->AddCircleFilled(screenPos, isSelected ? 4.2f : 3.2f, dotColor);
+
+            const char* nameText = chest.name.empty() ? "<unnamed>" : chest.name.c_str();
+            const char* templateText = chest.templateId.empty() ? "-" : chest.templateId.c_str();
+            char textBuf[512] = {};
+            if (g_treasureTool.espShowCoordinates) {
+                std::snprintf(textBuf,
+                              sizeof(textBuf),
+                              "%s\nUID:%u SID:%llu\nTID:%s\n(%.1f, %.1f, %.1f)",
+                              nameText,
+                              chest.instanceUid,
+                              static_cast<unsigned long long>(chest.serverId),
+                              templateText,
+                              chest.position.x,
+                              chest.position.y,
+                              chest.position.z);
+            } else {
+                std::snprintf(textBuf,
+                              sizeof(textBuf),
+                              "%s UID:%u SID:%llu\nTID:%s",
+                              nameText,
+                              chest.instanceUid,
+                              static_cast<unsigned long long>(chest.serverId),
+                              templateText);
+            }
+
+            draw->AddText(ImVec2(screenPos.x + 8.0f, screenPos.y - 12.0f), textColor, textBuf);
+        }
+    }
+
+    const int listCount = (std::min)(g_treasureTool.espListMaxCount, static_cast<int>(g_nearbyChests.size()));
+    const float lineHeight = 16.0f;
+    const float panelWidth = 700.0f;
+    const float panelHeight = 26.0f + (static_cast<float>(listCount) + 1.0f) * lineHeight;
+    const ImVec2 panelPos(18.0f, 80.0f);
+    draw->AddRectFilled(panelPos,
+                        ImVec2(panelPos.x + panelWidth, panelPos.y + panelHeight),
+                        IM_COL32(0, 0, 0, 130),
+                        6.0f);
+
+    char summary[256] = {};
+    std::snprintf(summary,
+                  sizeof(summary),
+                  "[ESP] interactives:%d projected:%d camera:%s hold:%s(%dms)",
+                  static_cast<int>(g_nearbyChests.size()),
+                  projectedCount,
+                  hasCamera ? "OK" : "FAIL",
+                  g_treasureTool.enableTeleportHold ? "ON" : "OFF",
+                  g_treasureTool.teleportHoldMs);
+    draw->AddText(ImVec2(panelPos.x + 8.0f, panelPos.y + 5.0f), IM_COL32(120, 255, 180, 255), summary);
+
+    float y = panelPos.y + 24.0f;
+    for (int i = 0; i < listCount; ++i) {
+        const NearbyChestInfo& chest = g_nearbyChests[static_cast<size_t>(i)];
+        const char* nameText = chest.name.empty() ? "<unnamed>" : chest.name.c_str();
+        const char* templateText = chest.templateId.empty() ? "-" : chest.templateId.c_str();
+        char row[512] = {};
+        std::snprintf(row,
+                      sizeof(row),
+                      "%02d %.1fm UID:%u SID:%llu addr:0x%llX %s | TID:%s",
+                      i + 1,
+                      chest.distance,
+                      chest.instanceUid,
+                      static_cast<unsigned long long>(chest.serverId),
+                      static_cast<unsigned long long>(chest.entityAddress),
+                      nameText,
+                      templateText);
+        const ImU32 rowColor = (i == g_treasureTool.selectedChestIndex) ? IM_COL32(255, 220, 90, 255) : IM_COL32(230, 230, 230, 220);
+        draw->AddText(ImVec2(panelPos.x + 8.0f, y), rowColor, row);
+        y += lineHeight;
+    }
+}
+
+bool IsForceNoCooldownEnabled() {
+    return g_statEditor.lockNoCooldownBypass || g_statEditor.lockInfiniteBlueNoCd || g_statEditor.lockAllSquadUltimateNoCd;
+}
+
+bool IsInfiniteDashEnabled() {
+    return g_statEditor.lockInfiniteBlink;
+}
+
+bool IsInfiniteStaminaEnabled() {
+    return g_statEditor.lockInfiniteStamina || g_statEditor.lockInfiniteBlink;
+}
+
+void ShutdownCheatRuntime() {
+    StopFastUltimateThread();
+}
